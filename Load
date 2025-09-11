@@ -1,0 +1,768 @@
+# Twitter Downloader Android App - Complete Repository Setup
+
+## 🚀 Quick Start (3 Steps to Get Your APK)
+
+### Step 1: Create GitHub Repository
+1. Go to [github.com](https://github.com) and sign in
+2. Click **"+" → "New repository"**
+3. Name: `twitter-downloader-android`
+4. Make it **Public**
+5. Check **"Add a README file"**
+6. Click **"Create repository"**
+
+### Step 2: Copy-Paste All Files
+Create each file exactly as shown below (click "Add file" → "Create new file" for each):
+
+---
+
+## 📁 File Structure to Create:
+
+### File 1: `.github/workflows/build-apk.yml`
+```yaml
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      
+    - name: Make gradlew executable
+      run: chmod +x ./gradlew
+      
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
+      
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: twitter-downloader-apk
+        path: app/build/outputs/apk/debug/app-debug.apk
+        retention-days: 30
+```
+
+### File 2: `app/build.gradle`
+```gradle
+plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+}
+
+android {
+    namespace 'com.example.twitterdownloader'
+    compileSdk 34
+    
+    defaultConfig {
+        applicationId "com.example.twitterdownloader"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+        
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.10.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}
+```
+
+### File 3: `app/src/main/AndroidManifest.xml`
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.TwitterDownloader"
+        tools:targetApi="31">
+        
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+```
+
+### File 4: `app/src/main/java/com/example/twitterdownloader/MainActivity.kt`
+```kotlin
+package com.example.twitterdownloader
+
+import android.Manifest
+import android.app.DownloadManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Environment
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.*
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.regex.Pattern
+
+class MainActivity : AppCompatActivity() {
+    private lateinit var urlInput: EditText
+    private lateinit var downloadButton: Button
+    private lateinit var statusText: TextView
+    private lateinit var progressBar: ProgressBar
+    
+    private val STORAGE_PERMISSION_CODE = 101
+    
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        createLayout()
+        checkPermissions()
+        handleSharedContent()
+    }
+    
+    private fun createLayout() {
+        val scrollView = ScrollView(this)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 32, 32, 32)
+        }
+        
+        // Title
+        val title = TextView(this).apply {
+            text = "🐦 Twitter Media Downloader"
+            textSize = 24f
+            setPadding(0, 0, 0, 32)
+            gravity = android.view.Gravity.CENTER
+        }
+        
+        // Instructions
+        val instructions = TextView(this).apply {
+            text = "Enter a Twitter/X URL or share it from the Twitter app"
+            textSize = 16f
+            setPadding(0, 0, 0, 16)
+            setTextColor(android.graphics.Color.GRAY)
+        }
+        
+        // URL input
+        urlInput = EditText(this).apply {
+            hint = "https://twitter.com/user/status/... or https://x.com/user/status/..."
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setPadding(16, 16, 16, 16)
+            background = ContextCompat.getDrawable(this@MainActivity, android.R.drawable.edit_text)
+        }
+        
+        // Progress bar
+        progressBar = ProgressBar(this).apply {
+            visibility = android.view.View.GONE
+            setPadding(0, 16, 0, 16)
+        }
+        
+        // Download button
+        downloadButton = Button(this).apply {
+            text = "📥 Download Media"
+            textSize = 18f
+            setPadding(16, 16, 16, 16)
+            setOnClickListener { 
+                val url = urlInput.text.toString().trim()
+                if (url.isNotEmpty()) {
+                    downloadTwitterMedia(url)
+                } else {
+                    Toast.makeText(this@MainActivity, "Please enter a URL", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        
+        // Status text
+        statusText = TextView(this).apply {
+            text = "Ready to download! 🚀\n\nSupported sites:\n• Twitter (twitter.com)\n• X (x.com)\n\nTip: You can also share URLs directly from the Twitter app!"
+            setPadding(0, 32, 0, 0)
+            textSize = 14f
+        }
+        
+        layout.addView(title)
+        layout.addView(instructions)
+        layout.addView(urlInput)
+        layout.addView(progressBar)
+        layout.addView(downloadButton)
+        layout.addView(statusText)
+        
+        scrollView.addView(layout)
+        setContentView(scrollView)
+    }
+    
+    private fun checkPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) 
+                != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, 
+                    arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 
+                    STORAGE_PERMISSION_CODE)
+            }
+        }
+    }
+    
+    private fun handleSharedContent() {
+        if (intent?.action == Intent.ACTION_SEND) {
+            if (intent.type == "text/plain") {
+                val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                if (sharedText != null && (sharedText.contains("twitter.com") || sharedText.contains("x.com"))) {
+                    urlInput.setText(sharedText)
+                    statusText.text = "Shared URL detected! Ready to download 📱"
+                }
+            }
+        }
+    }
+    
+    private fun downloadTwitterMedia(tweetUrl: String) {
+        downloadButton.isEnabled = false
+        progressBar.visibility = android.view.View.VISIBLE
+        statusText.text = "🔍 Looking for media in the tweet..."
+        
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val mediaUrls = extractMediaUrls(tweetUrl)
+                
+                withContext(Dispatchers.Main) {
+                    progressBar.visibility = android.view.View.GONE
+                    
+                    if (mediaUrls.isNotEmpty()) {
+                        statusText.text = "✅ Found ${mediaUrls.size} media file(s)!\n\n📥 Starting downloads...\nCheck your Downloads folder."
+                        downloadFiles(mediaUrls)
+                    } else {
+                        statusText.text = "❌ No media found in this tweet.\n\nTry:\n• A different tweet URL\n• A tweet with images or videos\n• Making sure the tweet is public"
+                    }
+                    
+                    downloadButton.isEnabled = true
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    progressBar.visibility = android.view.View.GONE
+                    statusText.text = "❌ Error: ${e.message}\n\nPlease try:\n• Checking your internet connection\n• Using a different URL\n• Trying again in a moment"
+                    downloadButton.isEnabled = true
+                }
+            }
+        }
+    }
+    
+    private suspend fun extractMediaUrls(tweetUrl: String): List<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val normalizedUrl = tweetUrl.replace("x.com", "twitter.com")
+                val urls = mutableListOf<String>()
+                
+                val tweetId = extractTweetId(normalizedUrl)
+                if (tweetId != null) {
+                    // Try nitter.net (Twitter alternative frontend)
+                    val nitterUrl = "https://nitter.net/i/status/$tweetId"
+                    val nitterUrls = scrapeNitter(nitterUrl)
+                    urls.addAll(nitterUrls)
+                }
+                
+                return@withContext urls
+            } catch (e: Exception) {
+                e.printStackTrace()
+                emptyList()
+            }
+        }
+    }
+    
+    private suspend fun scrapeNitter(nitterUrl: String): List<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val connection = URL(nitterUrl).openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.setRequestProperty("User-Agent", 
+                    "Mozilla/5.0 (Android 13; Mobile; rv:109.0) Gecko/118.0 Firefox/118.0")
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+                
+                if (connection.responseCode != 200) {
+                    return@withContext emptyList()
+                }
+                
+                val html = connection.inputStream.bufferedReader().use { it.readText() }
+                val urls = mutableListOf<String>()
+                
+                // Look for video sources
+                val videoPattern = Pattern.compile("src=\"([^\"]*\\.(mp4|mov)[^\"]*)")
+                val videoMatcher = videoPattern.matcher(html)
+                while (videoMatcher.find()) {
+                    val url = videoMatcher.group(1)
+                    if (url != null && !url.contains("profile") && !url.contains("avatar")) {
+                        val fullUrl = if (url.startsWith("http")) url else "https://nitter.net$url"
+                        urls.add(fullUrl)
+                    }
+                }
+                
+                // Look for images
+                val imagePattern = Pattern.compile("src=\"([^\"]*pic[^\"]*\\.(jpg|jpeg|png|gif|webp)[^\"]*)")
+                val imageMatcher = imagePattern.matcher(html)
+                while (imageMatcher.find()) {
+                    val url = imageMatcher.group(1)
+                    if (url != null && !url.contains("profile") && !url.contains("avatar")) {
+                        val fullUrl = if (url.startsWith("http")) url else "https://nitter.net$url"
+                        urls.add(fullUrl)
+                    }
+                }
+                
+                return@withContext urls.distinct()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                emptyList()
+            }
+        }
+    }
+    
+    private fun extractTweetId(url: String): String? {
+        val patterns = listOf(
+            Pattern.compile("status/(\\d+)"),
+            Pattern.compile("/status/(\\d+)"),
+            Pattern.compile("twitter\\.com/.+/status/(\\d+)"),
+            Pattern.compile("x\\.com/.+/status/(\\d+)")
+        )
+        
+        for (pattern in patterns) {
+            val matcher = pattern.matcher(url)
+            if (matcher.find()) {
+                return matcher.group(1)
+            }
+        }
+        return null
+    }
+    
+    private fun downloadFiles(urls: List<String>) {
+        val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        
+        urls.forEachIndexed { index, url ->
+            try {
+                val request = DownloadManager.Request(Uri.parse(url)).apply {
+                    setTitle("Twitter Media ${index + 1}")
+                    setDescription("Downloaded from Twitter")
+                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    
+                    val filename = "twitter_${System.currentTimeMillis()}_${index + 1}.${getFileExtension(url)}"
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
+                    
+                    setAllowedNetworkTypes(
+                        DownloadManager.Request.NETWORK_WIFI or 
+                        DownloadManager.Request.NETWORK_MOBILE
+                    )
+                }
+                
+                downloadManager.enqueue(request)
+                
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(this, "Failed to download file ${index + 1}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        
+        Toast.makeText(this, "Downloads started! Check your notification bar.", Toast.LENGTH_LONG).show()
+    }
+    
+    private fun getFileExtension(url: String): String {
+        return when {
+            url.contains(".mp4") -> "mp4"
+            url.contains(".mov") -> "mov"
+            url.contains(".webp") -> "webp"
+            url.contains(".png") -> "png"
+            url.contains(".gif") -> "gif"
+            url.contains(".jpeg") -> "jpeg"
+            else -> "jpg"
+        }
+    }
+    
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            STORAGE_PERMISSION_CODE -> {
+                if (grantResults.isNotEmpty() && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+                    Toast.makeText(this, "Storage permission is needed to download files", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+}
+```
+
+### File 5: `app/src/main/res/values/strings.xml`
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Twitter Downloader</string>
+</resources>
+```
+
+### File 6: `app/src/main/res/values/themes.xml`
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.TwitterDownloader" parent="Theme.AppCompat.DayNight.DarkActionBar">
+        <item name="colorPrimary">#1DA1F2</item>
+        <item name="colorPrimaryVariant">#1991DB</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="android:statusBarColor" tools:targetApi="l">#1991DB</item>
+    </style>
+</resources>
+```
+
+### File 7: `app/src/main/res/values/colors.xml`
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
+```
+
+### File 8: `app/src/main/res/xml/backup_rules.xml`
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content />
+```
+
+### File 9: `app/src/main/res/xml/data_extraction_rules.xml`
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup />
+    <device-transfer />
+</data-extraction-rules>
+```
+
+### File 10: `app/proguard-rules.pro`
+```
+# Add project specific ProGuard rules here.
+```
+
+### File 11: `build.gradle` (Project level)
+```gradle
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.4'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10'
+    }
+}
+
+plugins {
+    id 'com.android.application' version '8.1.4' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.10' apply false
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
+```
+
+### File 12: `settings.gradle`
+```gradle
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "Twitter Downloader"
+include ':app'
+```
+
+### File 13: `gradlew`
+```bash
+#!/usr/bin/env sh
+
+##############################################################################
+##
+##  Gradle start up script for UN*X
+##
+##############################################################################
+
+# Resolve links: $0 may be a link
+PRG="$0"
+# Need this for relative symlinks.
+while [ -h "$PRG" ] ; do
+    ls=`ls -ld "$PRG"`
+    link=`expr "$ls" : '.*-> \(.*\)$'`
+    if expr "$link" : '/.*' > /dev/null; then
+        PRG="$link"
+    else
+        PRG=`dirname "$PRG"`"/$link"
+    fi
+done
+SAVED="`pwd`"
+cd "`dirname \"$PRG\"`/" >/dev/null
+APP_HOME="`pwd -P`"
+cd "$SAVED" >/dev/null
+
+APP_NAME="Gradle"
+APP_BASE_NAME=`basename "$0"`
+
+# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
+DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+
+# Use the maximum available, or set MAX_FD != -1 to use that value.
+MAX_FD="maximum"
+
+warn () {
+    echo "$*"
+}
+
+die () {
+    echo
+    echo "$*"
+    echo
+    exit 1
+}
+
+# OS specific support (must be 'true' or 'false').
+cygwin=false
+msys=false
+darwin=false
+nonstop=false
+case "`uname`" in
+  CYGWIN* )
+    cygwin=true
+    ;;
+  Darwin* )
+    darwin=true
+    ;;
+  MINGW* )
+    msys=true
+    ;;
+  NONSTOP* )
+    nonstop=true
+    ;;
+esac
+
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+# Determine the Java command to use to start the JVM.
+if [ -n "$JAVA_HOME" ] ; then
+    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
+        # IBM's JDK on AIX uses strange locations for the executables
+        JAVACMD="$JAVA_HOME/jre/sh/java"
+    else
+        JAVACMD="$JAVA_HOME/bin/java"
+    fi
+    if [ ! -x "$JAVACMD" ] ; then
+        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
+
+Please set the JAVA_HOME variable in your environment to match the
+location of your Java installation."
+    fi
+else
+    JAVACMD="java"
+    which java >/dev/null 2>&1 || die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
+
+Please set the JAVA_HOME variable in your environment to match the
+location of your Java installation."
+fi
+
+# Increase the maximum file descriptors if we can.
+if [ "$cygwin" = "false" -a "$darwin" = "false" -a "$nonstop" = "false" ] ; then
+    MAX_FD_LIMIT=`ulimit -H -n`
+    if [ $? -eq 0 ] ; then
+        MAX_FD=`ulimit -S -n`
+        if [ "$MAX_FD" != "maximum" -a "$MAX_FD" != "unknown" ] ; then
+            ulimit -n $MAX_FD
+        fi
+    fi
+fi
+
+# For Darwin, add options to specify how the application appears in the dock
+if [ "$darwin" = "true" ]; then
+    GRADLE_OPTS="$GRADLE_OPTS \"-Xdock:name=Gradle\" \"-Xdock:icon=$APP_HOME/media/gradle.icns\""
+fi
+
+# For Cygwin or MSYS, switch paths to Windows format before running java
+if [ "$cygwin" = "true" -o "$msys" = "true" ] ; then
+    APP_HOME=`cygpath --path --mixed "$APP_HOME"`
+    CLASSPATH=`cygpath --path --mixed "$CLASSPATH"`
+    JAVACMD=`cygpath --unix "$JAVACMD"`
+
+    # We build the pattern for arguments to be converted via cygpath
+    ROOTDIRSRAW=`find -L / -maxdepth 1 -mindepth 1 -type d 2>/dev/null`
+    SEP=""
+    for dir in $ROOTDIRSRAW ; do
+        ROOTDIRS="$ROOTDIRS$SEP$dir"
+        SEP="|"
+    done
+    OURCYGPATTERN="(^($ROOTDIRS))"
+    # Add a user-defined pattern to the cygpath arguments
+    if [ "$GRADLE_CYGPATTERN" != "" ] ; then
+        OURCYGPATTERN="$OURCYGPATTERN|($GRADLE_CYGPATTERN)"
+    fi
+    # Now convert the arguments - kludge to limit ourselves to /bin/sh
+    i=0
+    for arg in "$@" ; do
+        CHECK=`echo "$arg"|egrep -c "$OURCYGPATTERN" -`
+        CHECK2=`echo "$arg"|egrep -c "^-"`                                 ### Determine if an option
+
+        if [ $CHECK -ne 0 ] && [ $CHECK2 -eq 0 ] ; then                    ### Added a condition
+            eval `echo args$i`=`cygpath --path --ignore --mixed "$arg"`
+        else
+            eval `echo args$i`="\"$arg\""
+        fi
+        i=$((i+1))
+    done
+    case $i in
+        (0) set -- ;;
+        (1) set -- "$args0" ;;
+        (2) set -- "$args0" "$args1" ;;
+        (3) set -- "$args0" "$args1" "$args2" ;;
+        (4) set -- "$args0" "$args1" "$args2" "$args3" ;;
+        (5) set -- "$args0" "$args1" "$args2" "$args3" "$args4" ;;
+        (6) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" ;;
+        (7) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" ;;
+        (8) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" "$args7" ;;
+        (9) set -- "$args0" "$args1" "$args2" "$args3" "$args4" "$args5" "$args6" "$args7" "$args8" ;;
+    esac
+fi
+
+# Escape application args
+save () {
+    for i do printf %s\\n "$i" | sed "s/'/'\\\\''/g;1s/^/'/;\$s/\$/' \\\\/" ; done
+    echo " "
+}
+APP_ARGS=$(save "$@")
+
+# Collect all arguments for the java command
+set -- $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS \"-Dorg.gradle.appname=$APP_BASE_NAME\" -classpath \"$CLASSPATH\" org.gradle.wrapper.GradleWrapperMain "$APP_ARGS"
+
+exec "$@"
+```
+
+### File 14: `gradle/wrapper/gradle-wrapper.properties`
+```properties
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+```
+
+---
+
+## Step 3: Get Your APK Automatically! 🎉
+
+1. **Go to your repository**
+2. **Click "Actions" tab**
+3. **Click "Build Android APK" workflow**
+4. **Click "Run workflow" → "Run workflow"**
+5. **Wait 5-10 minutes**
+6. **Refresh the page**
+7. **Click on the completed build**
+8. **Scroll down to "Artifacts"**
+9. **Click "twitter-downloader-apk" to download!**
+
+## 📱 How to Install on Your Tablet
+
+1. **Download the APK** from GitHub
+2. **Transfer to your tablet** (email, cloud drive, etc.)
+3. **Enable "Unknown Sources"** in Settings → Security
+4. **Tap the APK file** to install
+5. **Open the app** and start downloading Twitter media!
+
+## ✨ App Features
+
+- **Simple interface** - Just paste Twitter URLs
+- **Share from Twitter app** - Share URLs directly to this app
+- **Auto-download** - Finds and downloads all media
+- **Works with both** Twitter.com and X.com URLs
+- **Progress indicators** - Shows what's happening
+- **Multiple formats** - Images, videos, GIFs
+
+## 🔧 Troubleshooting
+
+If the build fails:
+1. **Check all files are created correctly**
+2. **Make sure file paths match exactly**
+3. **Try running the workflow again**
+4. **Check the "Actions" tab for error details**
+
+## 🎯 Ready to Use!
+
+Your APK will work on any Android device running Android 7.0+ (API 24+). Perfect for tablets and phones!

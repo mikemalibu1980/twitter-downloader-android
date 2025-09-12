@@ -22,15 +22,15 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
       
-    - name: Cache Gradle packages
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-
+    - name: Install Gradle
+      run: |
+        wget https://services.gradle.org/distributions/gradle-8.4-bin.zip
+        unzip -q gradle-8.4-bin.zip
+        export PATH=$PATH:$PWD/gradle-8.4/bin
+        echo "$PWD/gradle-8.4/bin" >> $GITHUB_PATH
+        
+    - name: Create Gradle Wrapper
+      run: gradle wrapper --gradle-version 8.4
         
     - name: Make gradlew executable
       run: chmod +x ./gradlew

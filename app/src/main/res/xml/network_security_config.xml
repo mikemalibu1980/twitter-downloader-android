@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">nitter.net</domain>
+        <domain includeSubdomains="true">nitter.it</domain>
+        <domain includeSubdomains="true">nitter.pussthecat.org</domain>
+        <domain includeSubdomains="true">nitter.fdn.fr</domain>
+        <domain includeSubdomains="true">pbs.twimg.com</domain>
+        <domain includeSubdomains="true">video.twimg.com</domain>
+        <domain includeSubdomains="true">twitter.com</domain>
+        <domain includeSubdomains="true">x.com</domain>
+        <domain includeSubdomains="true">mobile.twitter.com</domain>
+        <domain includeSubdomains="true">syndication.twitter.com</domain>
+    </domain-config>
+    
+    <!-- Allow cleartext traffic for media downloads -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -11,12 +11,12 @@ import android.os.Bundle
 import android.os.Environment
 import android.view.View
 import android.widget.*
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -24,39 +24,23 @@ import java.util.regex.Pattern
 
 class MainActivity : AppCompatActivity() {
     private lateinit var urlInput: EditText
-    private lateinit var extractButton: Button
+    private lateinit var loadButton: Button
     private lateinit var statusText: TextView
     private lateinit var resultsText: TextView
-    private lateinit var downloadAllButton: Button
+    private lateinit var downloadButton: Button
     private lateinit var progressBar: ProgressBar
     
     private val STORAGE_PERMISSION_CODE = 101
-    private var extractedMedia = ExtractedMedia()
-    
-    data class MediaItem(
-        val url: String,
-        val type: String,
-        val bitrate: Int = 0
-    )
-    
-    data class ExtractedMedia(
-        val videos: MutableList<MediaItem> = mutableListOf(),
-        val gifs: MutableList<MediaItem> = mutableListOf(),
-        val images: MutableList<MediaItem> = mutableListOf()
-    ) {
-        fun isEmpty(): Boolean = videos.isEmpty() && gifs.isEmpty() && images.isEmpty()
-        fun totalCount(): Int = videos.size + gifs.size + images.size
-        fun getAllItems(): List<MediaItem> = videos + gifs + images
-    }
+    private var foundUrls = listOf<String>()
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        createLayout()
+        createSimpleLayout()
         checkPermissions()
         handleSharedContent()
     }
     
-    private fun createLayout() {
+    private fun createSimpleLayout() {
         val scrollView = ScrollView(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -65,19 +49,9 @@ class MainActivity : AppCompatActivity() {
         
         // Title
         val title = TextView(this).apply {
-            text = "🎬 xdownloader.com Method"
-            textSize = 26f
-            setPadding(0, 0, 0, 16)
-            gravity = android.view.Gravity.CENTER
-            setTextColor(android.graphics.Color.parseColor("#1DA1F2"))
-        }
-        
-        // Subtitle
-        val subtitle = TextView(this).apply {
-            text = "Exact JavaScript implementation from xdownloader.com source code"
-            textSize = 14f
-            setPadding(16, 0, 16, 24)
-            setTextColor(android.graphics.Color.GRAY)
+            text = "🎬 X Media Downloader"
+            textSize = 24f
+            setPadding(0, 0, 0, 24)
             gravity = android.view.Gravity.CENTER
         }
         
@@ -88,9 +62,8 @@ class MainActivity : AppCompatActivity() {
         }
         
         urlInput = EditText(this).apply {
-            hint = "🔗 Paste X/Twitter URL here..."
+            hint = "Paste X/Twitter URL here..."
             setPadding(16, 16, 16, 16)
-            background = ContextCompat.getDrawable(this@MainActivity, android.R.drawable.edit_text)
         }
         
         val pasteButton = Button(this).apply {
@@ -98,7 +71,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { pasteFromClipboard() }
         }
         
-        // Set layout params
+        // Set layout params properly
         val inputParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         urlInput.layoutParams = inputParams
         
@@ -111,17 +84,15 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 16, 0, 16)
         }
         
-        // Extract button
-        extractButton = Button(this).apply {
-            text = "🎯 Extract Media (xdownloader method)"
+        // Load button
+        loadButton = Button(this).apply {
+            text = "🔍 Find Media"
             textSize = 16f
-            setPadding(20, 20, 20, 20)
-            setBackgroundColor(android.graphics.Color.parseColor("#1DA1F2"))
-            setTextColor(android.graphics.Color.WHITE)
+            setPadding(16, 16, 16, 16)
             setOnClickListener { 
                 val url = urlInput.text.toString().trim()
                 if (url.isNotEmpty()) {
-                    extractMediaFromTweet(url)
+                    findMedia(url)
                 } else {
                     Toast.makeText(this@MainActivity, "Please enter a URL", Toast.LENGTH_SHORT).show()
                 }
@@ -130,17 +101,16 @@ class MainActivity : AppCompatActivity() {
         
         // Status text
         statusText = TextView(this).apply {
-            text = "🚀 Ready to extract!\n\n" +
-                   "📋 xdownloader.com method:\n" +
-                   "1. Extract tweet ID from URL\n" +
-                   "2. Fetch raw HTML from X's public endpoint\n" +
-                   "3. Find JSON blob with extended_entities\n" +
-                   "4. Parse video_info.variants for highest bitrate\n" +
-                   "5. Extract media_url_https for images\n\n" +
-                   "🎯 Gets exact same results as xdownloader.com!"
+            text = "🚀 Ready to find media!\n\n" +
+                   "Based on xdownloader.com's method:\n" +
+                   "• Fetches public post HTML\n" +
+                   "• Parses __NEXT_DATA__ JSON for extended_entities\n" +
+                   "• Extracts highest quality media URLs from variants\n" +
+                   "• Downloads directly from X's CDN\n\n" +
+                   "Paste a URL and tap 'Find Media'\n\n" +
+                   "Note: For age-restricted posts, extraction may require browser confirmation—app fetches as guest."
             setPadding(16, 16, 16, 16)
             textSize = 14f
-            setTextColor(android.graphics.Color.DKGRAY)
         }
         
         // Results text (hidden initially)
@@ -154,25 +124,22 @@ class MainActivity : AppCompatActivity() {
             setTextIsSelectable(true)
         }
         
-        // Download all button (hidden initially)
-        downloadAllButton = Button(this).apply {
-            text = "📥 Download All Media"
+        // Download button (hidden initially)
+        downloadButton = Button(this).apply {
+            text = "📥 Download All Found Media"
             textSize = 16f
             setPadding(16, 16, 16, 16)
-            setBackgroundColor(android.graphics.Color.parseColor("#28a745"))
-            setTextColor(android.graphics.Color.WHITE)
             visibility = View.GONE
             setOnClickListener { downloadAllMedia() }
         }
         
         layout.addView(title)
-        layout.addView(subtitle)
         layout.addView(inputLayout)
-        layout.addView(extractButton)
+        layout.addView(loadButton)
         layout.addView(progressBar)
         layout.addView(statusText)
         layout.addView(resultsText)
-        layout.addView(downloadAllButton)
+        layout.addView(downloadButton)
         
         scrollView.addView(layout)
         setContentView(scrollView)
@@ -186,7 +153,7 @@ class MainActivity : AppCompatActivity() {
             if (clip != null && clip.itemCount > 0) {
                 val text = clip.getItemAt(0).text?.toString() ?: ""
                 urlInput.setText(text)
-                Toast.makeText(this, "✅ URL pasted!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "✅ Pasted!", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
             Toast.makeText(this, "Paste failed", Toast.LENGTH_SHORT).show()
@@ -209,197 +176,165 @@ class MainActivity : AppCompatActivity() {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
             if (sharedText != null) {
                 urlInput.setText(sharedText)
-                statusText.text = "📱 Shared URL detected! Ready to extract using xdownloader.com method."
+                statusText.text = "📱 Shared URL detected! Tap 'Find Media' to analyze."
             }
         }
     }
     
-    private fun extractMediaFromTweet(tweetUrl: String) {
-        extractButton.isEnabled = false
+    private fun findMedia(postUrl: String) {
+        loadButton.isEnabled = false
         progressBar.visibility = View.VISIBLE
         resultsText.visibility = View.GONE
-        downloadAllButton.visibility = View.GONE
-        extractedMedia = ExtractedMedia()
+        downloadButton.visibility = View.GONE
         
-        statusText.text = "🎯 Step 1/4: Extracting tweet ID from URL...\n(xdownloader.com method)"
+        statusText.text = "🔍 Finding media using xdownloader.com method...\n\nStep 1: Fetching post data..."
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Step 1: Extract tweet ID from URL (exact xdownloader.com logic)
-                val tweetIdMatch = Pattern.compile("/status(?:es)?/(\\d+)").matcher(tweetUrl)
-                if (!tweetIdMatch.find()) {
-                    throw Exception("Invalid tweet URL - could not extract tweet ID")
+                val tweetId = extractTweetId(postUrl) ?: throw Exception("Invalid URL - no tweet ID found")
+                val fetchUrl = "https://x.com/i/status/$tweetId"  // Use embed endpoint for cleaner HTML
+                val postData = fetchPostData(fetchUrl)
+                withContext(Dispatchers.Main) {
+                    statusText.text = "🔍 Step 2: Parsing JSON for media URLs..."
                 }
-                val tweetId = tweetIdMatch.group(1)!!
+                
+                val mediaUrls = extractAllMediaUrls(postData)
                 
                 withContext(Dispatchers.Main) {
-                    statusText.text = "🎯 Step 2/4: Fetching raw tweet HTML...\nTweet ID: $tweetId\n(Public endpoint, no auth needed)"
+                    statusText.text = "🔍 Step 3: Verifying media accessibility..."
                 }
                 
-                // Step 2: Fetch raw tweet HTML (exact xdownloader.com endpoint)
-                val html = fetchTweetHtml(tweetId)
-                
-                withContext(Dispatchers.Main) {
-                    statusText.text = "🎯 Step 3/4: Finding JSON blob with extended_entities...\n(Regex parsing like xdownloader.com)"
-                }
-                
-                // Step 3: Find the main tweet JSON blob (exact xdownloader.com regex)
-                val tweetData = extractTweetDataFromHtml(html)
-                
-                withContext(Dispatchers.Main) {
-                    statusText.text = "🎯 Step 4/4: Parsing media from extended_entities...\n(video_info.variants + media_url_https)"
-                }
-                
-                // Step 4: Extract media from JSON (exact xdownloader.com logic)
-                extractedMedia = parseMediaFromTweetData(tweetData)
+                val workingUrls = verifyUrls(mediaUrls)
                 
                 withContext(Dispatchers.Main) {
                     progressBar.visibility = View.GONE
-                    displayExtractionResults()
-                    extractButton.isEnabled = true
+                    displayResults(mediaUrls, workingUrls)
+                    loadButton.isEnabled = true
                 }
                 
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     progressBar.visibility = View.GONE
-                    statusText.text = "❌ Extraction failed: ${e.message}\n\n" +
-                                    "This could happen if:\n" +
-                                    "• Tweet is private or deleted\n" +
-                                    "• X changed their HTML structure\n" +
-                                    "• Network connectivity issues\n\n" +
-                                    "💡 Try a different public tweet with media."
-                    extractButton.isEnabled = true
+                    statusText.text = "❌ Media search failed: ${e.message}\n\n" +
+                                    "Common causes:\n" +
+                                    "• Post is private, deleted, or age-restricted\n" +
+                                    "• No media in this post\n" +
+                                    "• Network issues or X changes\n\n" +
+                                    "Try a different public post with videos/images."
+                    loadButton.isEnabled = true
                 }
             }
         }
     }
     
-    private suspend fun fetchTweetHtml(tweetId: String): String {
+    private suspend fun fetchPostData(fetchUrl: String): String {
         return withContext(Dispatchers.IO) {
-            // Use exact same endpoint as xdownloader.com
-            val url = "https://x.com/i/status/$tweetId"
+            // Expanded user agents for better compatibility
+            val userAgents = listOf(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                "Mozilla/5.0 (Android 14; Mobile; rv:130.0) Gecko/130.0 Firefox/130.0"
+            )
             
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.apply {
-                requestMethod = "GET"
-                // Use same headers as xdownloader.com would use
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
-                setRequestProperty("Cache-Control", "no-cache")
-                setRequestProperty("Pragma", "no-cache")
-                connectTimeout = 15000
-                readTimeout = 15000
-            }
-            
-            if (!connection.responseCode.toString().startsWith("2")) {
-                throw Exception("Failed to fetch tweet: HTTP ${connection.responseCode}")
-            }
-            
-            return@withContext connection.inputStream.bufferedReader().use { it.readText() }
-        }
-    }
-    
-    private fun extractTweetDataFromHtml(html: String): JSONObject {
-        // Try multiple patterns like xdownloader.com does
-        val patterns = listOf(
-            // Pattern 1: LD+JSON script (primary method)
-            Pattern.compile("<script[^>]*type=\"application/ld\\+json\"[^>]*>([\\s\\S]*?)</script>"),
-            
-            // Pattern 2: YTD tweets data (fallback)
-            Pattern.compile("window\\.YTD\\.tweets\\.part0\\s*=\\s*(\\[[\\s\\S]*?\\]);"),
-            
-            // Pattern 3: Direct extended_entities search (final fallback)
-            Pattern.compile("\"extended_entities\":\\s*(\\{[\\s\\S]*?\\}(?=,\")|\\{[\\s\\S]*?\\}$)")
-        )
-        
-        for ((index, pattern) in patterns.withIndex()) {
-            val matcher = pattern.matcher(html)
-            if (matcher.find()) {
+            for ((index, userAgent) in userAgents.withIndex()) {
                 try {
-                    val jsonString = matcher.group(1)!!
+                    withContext(Dispatchers.Main) {
+                        statusText.text = "🔍 Step 1: Trying fetch method ${index + 1}/${userAgents.size}..."
+                    }
                     
-                    when (index) {
-                        0 -> {
-                            // LD+JSON: could be array or object
-                            return try {
-                                val jsonArray = JSONArray(jsonString)
-                                jsonArray.getJSONObject(0)
-                            } catch (e: Exception) {
-                                JSONObject(jsonString)
-                            }
-                        }
-                        1 -> {
-                            // YTD tweets: always array
-                            val jsonArray = JSONArray(jsonString)
-                            return jsonArray.getJSONObject(0)
-                        }
-                        2 -> {
-                            // Direct extended_entities: wrap in object
-                            return JSONObject("{\"extended_entities\":$jsonString}")
+                    val connection = URL(fetchUrl).openConnection() as HttpURLConnection
+                    connection.apply {
+                        requestMethod = "GET"
+                        setRequestProperty("User-Agent", userAgent)
+                        setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                        setRequestProperty("Accept-Language", "en-US,en;q=0.5")
+                        setRequestProperty("Referer", "https://x.com/")
+                        connectTimeout = 15000
+                        readTimeout = 15000
+                        instanceFollowRedirects = true
+                    }
+                    
+                    if (connection.responseCode in 200..299) {
+                        val html = connection.inputStream.bufferedReader().use { it.readText() }
+                        if (html.contains("__NEXT_DATA__") || html.contains("extended_entities")) { // Check for useful data
+                            return@withContext html
                         }
                     }
                 } catch (e: Exception) {
-                    // Try next pattern
-                    continue
+                    // Continue to next
                 }
             }
+            
+            throw Exception("Could not fetch post data - try non-restricted post")
         }
-        
-        throw Exception("Could not find tweet data in HTML - X may have changed their structure")
     }
     
-    private fun parseMediaFromTweetData(tweetData: JSONObject): ExtractedMedia {
-        val extracted = ExtractedMedia()
+    private fun extractAllMediaUrls(html: String): List<String> {
+        val allUrls = mutableListOf<String>()
         
         try {
-            val extendedEntities = tweetData.optJSONObject("extended_entities")
-            val media = extendedEntities?.optJSONArray("media")
-            
-            if (media != null) {
-                for (i in 0 until media.length()) {
-                    val item = media.getJSONObject(i)
-                    val type = item.optString("type")
-                    
-                    when (type) {
-                        "photo" -> {
-                            // Static image: direct HTTPS URL (largest size)
-                            val mediaUrl = item.optString("media_url_https")
-                            if (mediaUrl.isNotEmpty()) {
-                                // Get original resolution (xdownloader.com does this)
-                                val originalUrl = mediaUrl.replace(Regex("name=\\w+$"), "name=orig")
-                                extracted.images.add(MediaItem(originalUrl, "image/jpeg"))
-                            }
-                        }
-                        
-                        "animated_gif", "video" -> {
-                            // Video or GIF: Parse variants for highest bitrate MP4
-                            val videoInfo = item.optJSONObject("video_info")
-                            val variants = videoInfo?.optJSONArray("variants")
-                            
-                            if (variants != null) {
-                                val mp4Variants = mutableListOf<Pair<String, Int>>() // URL to bitrate
-                                
-                                for (j in 0 until variants.length()) {
-                                    val variant = variants.getJSONObject(j)
-                                    val contentType = variant.optString("content_type")
-                                    val bitrate = variant.optInt("bitrate", 0)
-                                    val url = variant.optString("url")
-                                    
-                                    if (contentType == "video/mp4" && bitrate > 0 && url.isNotEmpty()) {
-                                        mp4Variants.add(Pair(url, bitrate))
-                                    }
-                                }
-                                
-                                if (mp4Variants.isNotEmpty()) {
-                                    // Sort by bitrate descending, pick best (exact xdownloader.com logic)
-                                    val best = mp4Variants.sortedByDescending { it.second }.first()
-                                    val mediaItem = MediaItem(best.first, "video/mp4", best.second)
-                                    
-                                    if (type == "animated_gif") {
-                                        extracted.gifs.add(mediaItem)
-                                    } else {
-                                        extracted.videos.add(mediaItem)
+            val pattern = Pattern.compile("<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", Pattern.DOTALL)
+            val matcher = pattern.matcher(html)
+            if (matcher.find()) {
+                val jsonStr = matcher.group(1)
+                val nextData = JSONObject(jsonStr)
+                val props = nextData.getJSONObject("props")
+                val pageProps = props.getJSONObject("pageProps")
+                val urqlState = pageProps.optJSONObject("urqlState")
+                if (urqlState != null) {
+                    val keys = urqlState.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val entry = urqlState.getJSONObject(key)
+                        if (entry.has("data")) {
+                            val data = entry.getJSONObject("data")
+                            if (data.has("tweetResult")) {
+                                val tweetResult = data.getJSONObject("tweetResult")
+                                val result = tweetResult.optJSONObject("result")
+                                if (result != null) {
+                                    val legacy = result.optJSONObject("legacy")
+                                    if (legacy != null) {
+                                        val extendedEntities = legacy.optJSONObject("extended_entities")
+                                        if (extendedEntities != null) {
+                                            val mediaArray = extendedEntities.optJSONArray("media")
+                                            if (mediaArray != null) {
+                                                for (i in 0 until mediaArray.length()) {
+                                                    val media = mediaArray.getJSONObject(i)
+                                                    val type = media.optString("type", "")
+                                                    if (type == "photo") {
+                                                        var url = media.getString("media_url_https")
+                                                        if (!url.contains(":orig")) {
+                                                            url += ":orig"
+                                                        }
+                                                        allUrls.add(url)
+                                                    } else if (type == "video" || type == "animated_gif") {
+                                                        val videoInfo = media.optJSONObject("video_info")
+                                                        if (videoInfo != null) {
+                                                            val variants = videoInfo.optJSONArray("variants")
+                                                            if (variants != null) {
+                                                                var bestUrl = ""
+                                                                var maxBitrate = -1
+                                                                for (j in 0 until variants.length()) {
+                                                                    val variant = variants.getJSONObject(j)
+                                                                    val contentType = variant.optString("content_type", "")
+                                                                    if (contentType == "video/mp4") {
+                                                                        val bitrate = variant.optInt("bitrate", 0)
+                                                                        if (bitrate > maxBitrate) {
+                                                                            maxBitrate = bitrate
+                                                                            bestUrl = variant.getString("url")
+                                                                        }
+                                                                    }
+                                                                }
+                                                                if (bestUrl.isNotEmpty()) {
+                                                                    allUrls.add(bestUrl)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -407,125 +342,174 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            throw Exception("Failed to parse media from tweet data: ${e.message}")
+        } catch (e: JSONException) {
+            // Fallback to regex for robustness
+            val fallbackPatterns = listOf(
+                "\"url\"\\s*:\\s*\"(https://video.twimg.com/[^\"]*\\.mp4[^\"]*)\"",
+                "\"media_url_https\"\\s*:\\s*\"(https://pbs.twimg.com/media/[^\"]*\\.jpg[^\"]*)\"",
+                // Add more if needed
+            )
+            
+            fallbackPatterns.forEach { patternStr ->
+                val pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE or Pattern.DOTALL)
+                val matcher = pattern.matcher(html)
+                while (matcher.find()) {
+                    val url = matcher.group(1)
+                    if (isValidMediaUrl(url)) {
+                        allUrls.add(url)
+                    }
+                }
+            }
         }
         
-        if (extracted.isEmpty()) {
-            throw Exception("No media found in tweet - post may contain only text")
-        }
-        
-        return extracted
+        return allUrls.distinct()
     }
     
-    private fun displayExtractionResults() {
+    private suspend fun verifyUrls(urls: List<String>): List<String> {
+        return withContext(Dispatchers.IO) {
+            val working = mutableListOf<String>()
+            
+            urls.forEach { url ->
+                try {
+                    val connection = URL(url).openConnection() as HttpURLConnection
+                    connection.apply {
+                        requestMethod = "HEAD"
+                        setRequestProperty("User-Agent", "Mozilla/5.0 (compatible; MediaDownloader/1.0)")
+                        setRequestProperty("Referer", "https://x.com/")
+                        connectTimeout = 5000
+                        readTimeout = 5000
+                    }
+                    
+                    if (connection.responseCode in 200..299 && connection.contentLength > 0) {
+                        working.add(url)
+                    }
+                } catch (e: Exception) {
+                    // Skip invalid
+                }
+            }
+            
+            working
+        }
+    }
+    
+    private fun displayResults(allUrls: List<String>, workingUrls: List<String>) {
+        foundUrls = workingUrls
+        
         val resultText = StringBuilder()
-        resultText.append("🎯 XDOWNLOADER.COM METHOD RESULTS\n")
-        resultText.append("Total media found: ${extractedMedia.totalCount()}\n")
-        resultText.append("Videos: ${extractedMedia.videos.size} • GIFs: ${extractedMedia.gifs.size} • Images: ${extractedMedia.images.size}\n\n")
+        resultText.append("📊 MEDIA SEARCH RESULTS\n")
+        resultText.append("Total URLs found: ${allUrls.size}\n")
+        resultText.append("Working URLs: ${workingUrls.size}\n\n")
         
-        // Display videos
-        if (extractedMedia.videos.isNotEmpty()) {
-            resultText.append("🎬 VIDEOS (highest bitrate MP4):\n")
-            extractedMedia.videos.forEachIndexed { index, video ->
-                resultText.append("${index + 1}. ${video.bitrate} kbps\n${video.url}\n\n")
+        if (workingUrls.isEmpty()) {
+            statusText.text = "❌ No accessible media found.\n\n" +
+                             "Tried ${allUrls.size} potential URLs but none are accessible.\n\n" +
+                             "This usually means:\n" +
+                             "• Post has no media content\n" +
+                             "• Media is protected/private/age-restricted\n" +
+                             "• Post was deleted\n\n" +
+                             "💡 Try a different public post with videos or images."
+            
+            if (allUrls.isNotEmpty()) {
+                resultText.append("🔍 ATTEMPTED URLS:\n")
+                resultText.append("(These didn't work, but you can copy and test manually)\n\n")
+                allUrls.take(5).forEachIndexed { index, url ->
+                    resultText.append("${index + 1}. ❌ ${getFileName(url)}\n$url\n\n")
+                }
+                if (allUrls.size > 5) {
+                    resultText.append("... and ${allUrls.size - 5} more URLs")
+                }
             }
-        }
-        
-        // Display GIFs
-        if (extractedMedia.gifs.isNotEmpty()) {
-            resultText.append("🎞️ ANIMATED GIFS (as MP4):\n")
-            extractedMedia.gifs.forEachIndexed { index, gif ->
-                resultText.append("${index + 1}. ${gif.bitrate} kbps\n${gif.url}\n\n")
+        } else {
+            statusText.text = "✅ SUCCESS! Found ${workingUrls.size} working media URL(s)!\n\n" +
+                             "Media files are accessible and ready for download.\n" +
+                             "Tap 'Download All' or copy individual URLs below."
+            
+            resultText.append("✅ WORKING MEDIA URLS:\n")
+            resultText.append("(Long-press any URL to copy and test manually)\n\n")
+            
+            workingUrls.forEachIndexed { index, url ->
+                val type = when {
+                    url.contains(".mp4") || url.contains("video") -> "🎬 VIDEO"
+                    url.contains(".jpg") || url.contains(".jpeg") || url.contains(".png") -> "🖼️ IMAGE"
+                    url.contains(".gif") -> "🎞️ GIF"
+                    else -> "📁 MEDIA"
+                }
+                
+                resultText.append("${index + 1}. $type\n")
+                resultText.append("${getFileName(url)}\n")
+                resultText.append("$url\n\n")
             }
+            
+            downloadButton.visibility = View.VISIBLE
         }
-        
-        // Display images
-        if (extractedMedia.images.isNotEmpty()) {
-            resultText.append("🖼️ IMAGES (original resolution):\n")
-            extractedMedia.images.forEachIndexed { index, image ->
-                resultText.append("${index + 1}. Original quality\n${image.url}\n\n")
-            }
-        }
-        
-        resultText.append("💡 These are the exact same URLs that xdownloader.com would find!")
-        
-        statusText.text = "✅ SUCCESS! Extracted ${extractedMedia.totalCount()} media files!\n\n" +
-                         "🎯 Using xdownloader.com's exact method:\n" +
-                         "• Found extended_entities in HTML\n" +
-                         "• Parsed video_info.variants\n" +
-                         "• Selected highest bitrate MP4s\n" +
-                         "• Got original resolution images\n\n" +
-                         "Ready to download!"
         
         resultsText.text = resultText.toString()
         resultsText.visibility = View.VISIBLE
-        downloadAllButton.visibility = View.VISIBLE
     }
     
     private fun downloadAllMedia() {
-        if (extractedMedia.isEmpty()) {
+        if (foundUrls.isEmpty()) {
             Toast.makeText(this, "No media to download", Toast.LENGTH_SHORT).show()
             return
         }
         
         try {
             val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val allItems = extractedMedia.getAllItems()
             
-            allItems.forEachIndexed { index, item ->
-                val request = DownloadManager.Request(Uri.parse(item.url)).apply {
-                    val mediaType = when {
-                        extractedMedia.videos.contains(item) -> "Video"
-                        extractedMedia.gifs.contains(item) -> "GIF"
-                        else -> "Image"
-                    }
-                    
-                    val bitrateInfo = if (item.bitrate > 0) " (${item.bitrate}kbps)" else ""
-                    
-                    setTitle("X $mediaType ${index + 1}$bitrateInfo")
-                    setDescription("Extracted via xdownloader.com method")
+            foundUrls.forEachIndexed { index, url ->
+                val request = DownloadManager.Request(Uri.parse(url)).apply {
+                    setTitle("X Media ${index + 1}")
+                    setDescription("From: ${getFileName(url)}")
                     setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     
-                    val extension = when {
-                        item.url.contains(".mp4") -> "mp4"
-                        item.url.contains(".jpg") || item.url.contains("jpeg") -> "jpg"
-                        item.url.contains(".png") -> "png"
-                        item.url.contains(".gif") -> "gif"
-                        else -> "media"
-                    }
-                    
-                    val filename = "xdownloader_${mediaType.lowercase()}_${System.currentTimeMillis()}_${index + 1}.$extension"
+                    val filename = "x_media_${System.currentTimeMillis()}_${index + 1}.${getFileExtension(url)}"
                     setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
                     
                     setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
                     
-                    // Headers like xdownloader.com
-                    addRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    addRequestHeader("User-Agent", "Mozilla/5.0 (compatible; MediaDownloader/1.0)")
                     addRequestHeader("Referer", "https://x.com/")
                 }
                 
                 downloadManager.enqueue(request)
             }
             
-            Toast.makeText(this, "✅ Started ${allItems.size} downloads using xdownloader.com method!\nCheck Downloads folder.", Toast.LENGTH_LONG).show()
-            
-            // Show success dialog
-            AlertDialog.Builder(this)
-                .setTitle("🎉 xdownloader.com Method Success!")
-                .setMessage(
-                    "Downloaded media using the exact same method as xdownloader.com:\n\n" +
-                    "Videos: ${extractedMedia.videos.size}\n" +
-                    "GIFs: ${extractedMedia.gifs.size}\n" +
-                    "Images: ${extractedMedia.images.size}\n\n" +
-                    "Files will appear in your Downloads folder."
-                )
-                .setPositiveButton("Awesome!", null)
-                .setNeutralButton("Clear URL") { _, _ -> urlInput.setText("") }
-                .show()
+            Toast.makeText(this, "✅ Started ${foundUrls.size} downloads!\nCheck Downloads folder & notifications.", Toast.LENGTH_LONG).show()
             
         } catch (e: Exception) {
             Toast.makeText(this, "❌ Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+    
+    private fun extractTweetId(url: String): String? {
+        val pattern = Pattern.compile("status(?:es)?/(\\d+)")
+        val matcher = pattern.matcher(url)
+        return if (matcher.find()) matcher.group(1) else null
+    }
+    
+    private fun isValidMediaUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return (lower.contains("pbs.twimg.com") || lower.contains("video.twimg.com")) &&
+               (lower.contains(".mp4") || lower.contains(".jpg") || lower.contains(".jpeg") ||
+                lower.contains(".png") || lower.contains(".gif") || lower.contains(".webp")) &&
+               !lower.contains("profile") && !lower.contains("avatar") && 
+               !lower.contains("icon") && url.length > 20
+    }
+    
+    private fun getFileName(url: String): String {
+        return url.substringAfterLast("/").substringBefore("?").ifEmpty { "media_file" }
+    }
+    
+    private fun getFileExtension(url: String): String {
+        val ext = url.substringAfterLast(".").substringBefore("?")
+        return when {
+            ext.contains("mp4", true) -> "mp4"
+            ext.contains("webm", true) -> "webm"
+            ext.contains("png", true) -> "png"
+            ext.contains("gif", true) -> "gif"
+            ext.contains("webp", true) -> "webp"
+            ext.contains("jpeg", true) -> "jpeg"
+            else -> "jpg"
         }
     }
     

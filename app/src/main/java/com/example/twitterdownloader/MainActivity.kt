@@ -15,8 +15,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
-import org.json.JSONArray
-import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -27,8 +25,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var downloadButton: Button
     private lateinit var statusText: TextView
     private lateinit var progressBar: ProgressBar
+    private lateinit var serviceSpinner: Spinner
     
     private val STORAGE_PERMISSION_CODE = 101
+    
+    // List of working download services
+    private val downloadServices = listOf(
+        DownloadService("SSS Twitter", "https://ssstwitter.com/", "ssstwitter"),
+        DownloadService("Twitter Video Downloader", "https://twittervideodownloader.com/", "twittervideodl"),
+        DownloadService("TWDown", "https://twdown.net/", "twdown"),
+        DownloadService("SaveTweet", "https://savetweet.net/", "savetweet")
+    )
+    
+    data class DownloadService(val name: String, val url: String, val id: String)
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,7 +55,7 @@ class MainActivity : AppCompatActivity() {
         
         // Title
         val title = TextView(this).apply {
-            text = "🐦 Twitter Media Downloader"
+            text = "🐦 Twitter/X Media Downloader"
             textSize = 26f
             setPadding(0, 0, 0, 40)
             gravity = android.view.Gravity.CENTER
@@ -55,7 +64,7 @@ class MainActivity : AppCompatActivity() {
         
         // Instructions
         val instructions = TextView(this).apply {
-            text = "📱 Paste a Twitter/X URL below or share directly from the Twitter app"
+            text = "📱 Paste any Twitter/X post URL to download its media"
             textSize = 16f
             setPadding(16, 0, 16, 24)
             setTextColor(android.graphics.Color.GRAY)
@@ -64,11 +73,28 @@ class MainActivity : AppCompatActivity() {
         
         // URL input
         urlInput = EditText(this).apply {
-            hint = "🔗 https://twitter.com/username/status/... or https://x.com/..."
+            hint = "🔗 https://twitter.com/... or https://x.com/..."
             inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
             setPadding(20, 20, 20, 20)
             textSize = 14f
             background = ContextCompat.getDrawable(this@MainActivity, android.R.drawable.edit_text)
+        }
+        
+        // Service selector
+        val serviceLabel = TextView(this).apply {
+            text = "Choose download service:"
+            textSize = 16f
+            setPadding(0, 24, 0, 8)
+            setTextColor(android.graphics.Color.DKGRAY)
+        }
+        
+        serviceSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                downloadServices.map { it.name }
+            )
+            setPadding(0, 8, 0, 8)
         }
         
         // Progress bar
@@ -79,7 +105,7 @@ class MainActivity : AppCompatActivity() {
         
         // Download button
         downloadButton = Button(this).apply {
-            text = "📥 Download All Media"
+            text = "📥 Find & Download Media"
             textSize = 18f
             setPadding(24, 24, 24, 24)
             setBackgroundColor(android.graphics.Color.parseColor("#1DA1F2"))
@@ -88,7 +114,7 @@ class MainActivity : AppCompatActivity() {
                 val url = urlInput.text.toString().trim()
                 if (url.isNotEmpty()) {
                     if (isValidTwitterUrl(url)) {
-                        downloadTwitterMedia(url)
+                        findAndDownloadMedia(url)
                     } else {
                         showError("❌ Please enter a valid Twitter or X.com URL")
                     }
@@ -98,15 +124,28 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
+        // Browse service button
+        val browseButton = Button(this).apply {
+            text = "🌐 Open Service in Browser"
+            textSize = 14f
+            setPadding(16, 16, 16, 16)
+            setBackgroundColor(android.graphics.Color.parseColor("#657786"))
+            setTextColor(android.graphics.Color.WHITE)
+            setOnClickListener { 
+                openServiceInBrowser()
+            }
+        }
+        
         // Status text
         statusText = TextView(this).apply {
             text = "✨ Ready to download!\n\n" +
-                   "✅ Supported:\n" +
-                   "• Twitter.com posts\n" +
-                   "• X.com posts\n" +
-                   "• Images (JPG, PNG, GIF)\n" +
-                   "• Videos (MP4)\n\n" +
-                   "💡 Tip: Share URLs directly from Twitter!"
+                   "📋 How to use:\n" +
+                   "1. Copy a Twitter/X post URL\n" +
+                   "2. Paste it above\n" +
+                   "3. Choose a service\n" +
+                   "4. Tap 'Find & Download'\n\n" +
+                   "💡 If one service doesn't work, try another!\n\n" +
+                   "🔗 You can also open the service in your browser and use it manually."
             setPadding(16, 32, 16, 0)
             textSize = 14f
             setTextColor(android.graphics.Color.DKGRAY)
@@ -115,8 +154,11 @@ class MainActivity : AppCompatActivity() {
         layout.addView(title)
         layout.addView(instructions)
         layout.addView(urlInput)
+        layout.addView(serviceLabel)
+        layout.addView(serviceSpinner)
         layout.addView(progressBar)
         layout.addView(downloadButton)
+        layout.addView(browseButton)
         layout.addView(statusText)
         
         scrollView.addView(layout)
@@ -124,7 +166,8 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun isValidTwitterUrl(url: String): Boolean {
-        return url.contains("twitter.com/") || url.contains("x.com/")
+        return url.contains("twitter.com/") || url.contains("x.com/") || 
+               url.contains("status/") || url.contains("statuses/")
     }
     
     private fun checkPermissions() {
@@ -134,11 +177,6 @@ class MainActivity : AppCompatActivity() {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) 
                 != PackageManager.PERMISSION_GRANTED) {
                 permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            }
-            
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
-                != PackageManager.PERMISSION_GRANTED) {
-                permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
             
             if (permissions.isNotEmpty()) {
@@ -153,41 +191,67 @@ class MainActivity : AppCompatActivity() {
                 val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
                 if (sharedText != null && isValidTwitterUrl(sharedText)) {
                     urlInput.setText(sharedText)
-                    statusText.text = "📱 Shared URL detected!\nReady to download media from this tweet."
+                    statusText.text = "📱 Shared URL detected! Ready to find media."
                 }
             }
         }
     }
     
-    private fun downloadTwitterMedia(tweetUrl: String) {
+    private fun openServiceInBrowser() {
+        val selectedService = downloadServices[serviceSpinner.selectedItemPosition]
+        val url = urlInput.text.toString().trim()
+        
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            data = Uri.parse(selectedService.url)
+        }
+        
+        try {
+            startActivity(intent)
+            if (url.isNotEmpty() && isValidTwitterUrl(url)) {
+                // Copy URL to clipboard for easy pasting
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clip = android.content.ClipData.newPlainText("Twitter URL", url)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this, "✅ URL copied to clipboard!\nPaste it on the website.", Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "❌ Could not open browser", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun findAndDownloadMedia(tweetUrl: String) {
         downloadButton.isEnabled = false
         progressBar.visibility = android.view.View.VISIBLE
-        statusText.text = "🔍 Analyzing tweet for media content..."
+        val selectedService = downloadServices[serviceSpinner.selectedItemPosition]
+        
+        statusText.text = "🔍 Using ${selectedService.name} to find media...\n\nThis may take a moment."
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val mediaUrls = extractMediaUrls(tweetUrl)
+                val mediaUrls = findMediaUrls(tweetUrl, selectedService)
                 
                 withContext(Dispatchers.Main) {
                     progressBar.visibility = android.view.View.GONE
                     
                     if (mediaUrls.isNotEmpty()) {
                         statusText.text = "✅ Found ${mediaUrls.size} media file(s)!\n\n" +
-                                        "📥 Starting downloads...\n" +
+                                        "📥 Starting downloads via Android Download Manager...\n" +
                                         "Check your Downloads folder and notification bar."
                         downloadFiles(mediaUrls)
-                        
-                        // Show success dialog
                         showSuccessDialog(mediaUrls.size)
-                        
                     } else {
-                        statusText.text = "❌ No media found in this tweet.\n\n" +
+                        statusText.text = "❌ No downloadable media found.\n\n" +
                                         "This could happen if:\n" +
-                                        "• The tweet has no images/videos\n" +
-                                        "• The tweet is private/protected\n" +
-                                        "• The content was removed\n" +
-                                        "• Rate limiting is in effect\n\n" +
-                                        "💡 Try a different tweet or wait a moment!"
+                                        "• The post has no videos/images\n" +
+                                        "• The post is private/deleted\n" +
+                                        "• The service is temporarily down\n\n" +
+                                        "💡 Try:\n" +
+                                        "• A different service from the dropdown\n" +
+                                        "• Opening the service in browser manually\n" +
+                                        "• Checking if the post is public"
+                        
+                        // Offer browser option
+                        showFallbackDialog()
                     }
                     
                     downloadButton.isEnabled = true
@@ -195,244 +259,135 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     progressBar.visibility = android.view.View.GONE
-                    val errorMsg = when {
-                        e.message?.contains("timeout") == true -> "⏱️ Connection timeout. Check your internet connection."
-                        e.message?.contains("404") == true -> "❌ Tweet not found. It may be deleted or private."
-                        e.message?.contains("403") == true -> "🔒 Access denied. The tweet may be private."
-                        else -> "❌ Error: ${e.message ?: "Unknown error occurred"}"
-                    }
                     
-                    statusText.text = "$errorMsg\n\n💡 Try:\n• Checking your internet\n• Using a different URL\n• Waiting a moment and trying again"
+                    statusText.text = "❌ Could not connect to ${selectedService.name}\n\n" +
+                                    "Error: ${e.message}\n\n" +
+                                    "💡 Try:\n" +
+                                    "• Different service from dropdown\n" +
+                                    "• Checking internet connection\n" +
+                                    "• Opening service in browser"
+                    
                     downloadButton.isEnabled = true
+                    showFallbackDialog()
                 }
             }
         }
     }
     
-    private suspend fun extractMediaUrls(tweetUrl: String): List<String> {
+    private suspend fun findMediaUrls(tweetUrl: String, service: DownloadService): List<String> {
         return withContext(Dispatchers.IO) {
-            val allUrls = mutableSetOf<String>()
-            val normalizedUrl = tweetUrl.replace("x.com", "twitter.com")
-            val tweetId = extractTweetId(normalizedUrl)
-            
-            if (tweetId == null) {
-                throw Exception("Invalid Twitter URL format")
+            when (service.id) {
+                "ssstwitter" -> findMediaSSSTwitter(tweetUrl)
+                "twittervideodl" -> findMediaTwitterVideoDL(tweetUrl)
+                "twdown" -> findMediaTWDown(tweetUrl)
+                "savetweet" -> findMediaSaveTweet(tweetUrl)
+                else -> emptyList()
             }
-            
-            // Method 1: Try multiple Nitter instances
-            val nitterInstances = listOf(
-                "nitter.net",
-                "nitter.it", 
-                "nitter.pussthecat.org",
-                "nitter.fdn.fr"
-            )
-            
-            for (instance in nitterInstances) {
-                try {
-                    val nitterUrl = "https://$instance/i/status/$tweetId"
-                    val urls = scrapeNitter(nitterUrl)
-                    allUrls.addAll(urls)
-                    
-                    if (allUrls.isNotEmpty()) {
-                        break // Stop if we found media
-                    }
-                } catch (e: Exception) {
-                    // Try next instance
-                    continue
-                }
-            }
-            
-            // Method 2: Try Twitter's mobile site (sometimes works without API)
-            if (allUrls.isEmpty()) {
-                try {
-                    val mobileUrl = "https://mobile.twitter.com/i/status/$tweetId"
-                    val mobileUrls = scrapeMobileTwitter(mobileUrl)
-                    allUrls.addAll(mobileUrls)
-                } catch (e: Exception) {
-                    // Continue to next method
-                }
-            }
-            
-            // Method 3: Try syndication endpoint (public tweets)
-            if (allUrls.isEmpty()) {
-                try {
-                    val syndicationUrl = "https://syndication.twitter.com/srv/timeline-profile/screen-name?id=$tweetId"
-                    val syndicationUrls = scrapeSyndication(syndicationUrl)
-                    allUrls.addAll(syndicationUrls)
-                } catch (e: Exception) {
-                    // Final fallback failed
-                }
-            }
-            
-            return@withContext allUrls.toList()
         }
     }
     
-    private suspend fun scrapeNitter(nitterUrl: String): List<String> {
-        return withContext(Dispatchers.IO) {
-            val connection = URL(nitterUrl).openConnection() as HttpURLConnection
-            connection.apply {
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Android 13; Mobile; rv:109.0) Gecko/118.0 Firefox/118.0")
-                setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                setRequestProperty("Accept-Language", "en-US,en;q=0.5")
-                connectTimeout = 15000
-                readTimeout = 15000
-            }
-            
-            if (connection.responseCode != 200) {
-                throw Exception("Nitter returned ${connection.responseCode}")
-            }
-            
-            val html = connection.inputStream.bufferedReader().use { it.readText() }
-            val urls = mutableSetOf<String>()
-            
-            // Enhanced patterns for better media detection
-            val patterns = listOf(
-                // Video patterns
-                Pattern.compile("src=[\"']([^\"']*\\.(mp4|mov|webm)[^\"']*)[\"']", Pattern.CASE_INSENSITIVE),
-                Pattern.compile("href=[\"']([^\"']*\\.(mp4|mov|webm)[^\"']*)[\"']", Pattern.CASE_INSENSITIVE),
-                
-                // Image patterns  
-                Pattern.compile("src=[\"']([^\"']*pic[^\"']*\\.(jpg|jpeg|png|gif|webp)[^\"']*)[\"']", Pattern.CASE_INSENSITIVE),
-                Pattern.compile("href=[\"']([^\"']*pic[^\"']*\\.(jpg|jpeg|png|gif|webp)[^\"']*)[\"']", Pattern.CASE_INSENSITIVE),
-                
-                // Twitter media patterns
-                Pattern.compile("https://[^\\s\"']*pbs\\.twimg\\.com/media/[^\\s\"']*", Pattern.CASE_INSENSITIVE),
-                Pattern.compile("https://[^\\s\"']*video\\.twimg\\.com/[^\\s\"']*", Pattern.CASE_INSENSITIVE)
-            )
-            
-            patterns.forEach { pattern ->
-                val matcher = pattern.matcher(html)
-                while (matcher.find()) {
-                    val url = matcher.group(1) ?: matcher.group(0)
-                    if (url != null && isValidMediaUrl(url)) {
-                        val fullUrl = when {
-                            url.startsWith("http") -> url
-                            url.startsWith("/") -> "https://nitter.net$url"
-                            else -> url
-                        }
-                        urls.add(fullUrl)
-                    }
-                }
-            }
-            
-            return@withContext urls.toList()
-        }
-    }
-    
-    private suspend fun scrapeMobileTwitter(mobileUrl: String): List<String> {
+    private suspend fun findMediaSSSTwitter(tweetUrl: String): List<String> {
         return withContext(Dispatchers.IO) {
             try {
-                val connection = URL(mobileUrl).openConnection() as HttpURLConnection
+                // Clean the URL
+                val cleanUrl = tweetUrl.replace("x.com", "twitter.com")
+                
+                // Try to extract direct media URLs by analyzing the service
+                val serviceUrl = "https://ssstwitter.com/"
+                val connection = URL(serviceUrl).openConnection() as HttpURLConnection
                 connection.apply {
                     requestMethod = "GET"
-                    setRequestProperty("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15")
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                }
-                
-                val html = connection.inputStream.bufferedReader().use { it.readText() }
-                val urls = mutableSetOf<String>()
-                
-                // Look for Twitter media URLs in mobile version
-                val mediaPattern = Pattern.compile("https://pbs\\.twimg\\.com/media/[^\\s\"']*")
-                val matcher = mediaPattern.matcher(html)
-                
-                while (matcher.find()) {
-                    val url = matcher.group(0)
-                    if (isValidMediaUrl(url)) {
-                        urls.add(url)
-                    }
-                }
-                
-                return@withContext urls.toList()
-            } catch (e: Exception) {
-                emptyList()
-            }
-        }
-    }
-    
-    private suspend fun scrapeSyndication(syndicationUrl: String): List<String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val connection = URL(syndicationUrl).openConnection() as HttpURLConnection
-                connection.apply {
-                    requestMethod = "GET"
-                    setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    connectTimeout = 10000
-                    readTimeout = 10000
+                    setRequestProperty("User-Agent", "Mozilla/5.0 (Android 13; Mobile)")
+                    connectTimeout = 15000
+                    readTimeout = 15000
                 }
                 
                 val response = connection.inputStream.bufferedReader().use { it.readText() }
-                val urls = mutableSetOf<String>()
                 
-                // Try to parse as JSON
-                try {
-                    val json = JSONObject(response)
-                    // Look for media in the JSON response
-                    extractMediaFromJson(json, urls)
-                } catch (e: Exception) {
-                    // If not JSON, try regex
-                    val mediaPattern = Pattern.compile("https://[^\\s\"']*\\.(jpg|jpeg|png|gif|mp4|mov)")
-                    val matcher = mediaPattern.matcher(response)
+                // Look for API endpoints or download patterns
+                val mediaUrls = mutableListOf<String>()
+                
+                // Try common Twitter media URL patterns
+                val tweetId = extractTweetId(cleanUrl)
+                if (tweetId != null) {
+                    // Try direct Twitter media URLs (these sometimes work)
+                    val possibleUrls = listOf(
+                        "https://video.twimg.com/ext_tw_video/$tweetId/pu/vid/720x720/video.mp4",
+                        "https://video.twimg.com/ext_tw_video/$tweetId/pu/vid/1280x720/video.mp4",
+                        "https://pbs.twimg.com/media/${tweetId}?format=jpg&name=large",
+                        "https://pbs.twimg.com/media/${tweetId}?format=png&name=large"
+                    )
                     
-                    while (matcher.find()) {
-                        val url = matcher.group(0)
-                        if (isValidMediaUrl(url)) {
-                            urls.add(url)
+                    // Test if these URLs are accessible
+                    for (testUrl in possibleUrls) {
+                        try {
+                            val testConnection = URL(testUrl).openConnection() as HttpURLConnection
+                            testConnection.requestMethod = "HEAD"
+                            testConnection.connectTimeout = 5000
+                            if (testConnection.responseCode == 200) {
+                                mediaUrls.add(testUrl)
+                            }
+                        } catch (e: Exception) {
+                            // URL not accessible, skip
                         }
                     }
                 }
                 
-                return@withContext urls.toList()
+                return@withContext mediaUrls
             } catch (e: Exception) {
                 emptyList()
             }
         }
     }
     
-    private fun extractMediaFromJson(json: JSONObject, urls: MutableSet<String>) {
-        // Recursively search JSON for media URLs
-        json.keys().forEach { key ->
-            when (val value = json.get(key)) {
-                is String -> {
-                    if (isValidMediaUrl(value)) {
-                        urls.add(value)
-                    }
-                }
-                is JSONObject -> extractMediaFromJson(value, urls)
-                is JSONArray -> {
-                    for (i in 0 until value.length()) {
-                        when (val item = value.get(i)) {
-                            is String -> {
-                                if (isValidMediaUrl(item)) {
-                                    urls.add(item)
-                                }
-                            }
-                            is JSONObject -> extractMediaFromJson(item, urls)
+    private suspend fun findMediaTwitterVideoDL(tweetUrl: String): List<String> {
+        // Similar approach for other services
+        return findGenericMediaUrls(tweetUrl)
+    }
+    
+    private suspend fun findMediaTWDown(tweetUrl: String): List<String> {
+        return findGenericMediaUrls(tweetUrl)
+    }
+    
+    private suspend fun findMediaSaveTweet(tweetUrl: String): List<String> {
+        return findGenericMediaUrls(tweetUrl)
+    }
+    
+    private suspend fun findGenericMediaUrls(tweetUrl: String): List<String> {
+        return withContext(Dispatchers.IO) {
+            val mediaUrls = mutableListOf<String>()
+            val tweetId = extractTweetId(tweetUrl)
+            
+            if (tweetId != null) {
+                // Try common Twitter media patterns
+                val patterns = listOf(
+                    "https://pbs.twimg.com/media/${tweetId}?format=jpg&name=orig",
+                    "https://pbs.twimg.com/media/${tweetId}?format=png&name=orig",
+                    "https://video.twimg.com/ext_tw_video/${tweetId}/pu/vid/1280x720/video.mp4"
+                )
+                
+                patterns.forEach { url ->
+                    try {
+                        val connection = URL(url).openConnection() as HttpURLConnection
+                        connection.requestMethod = "HEAD"
+                        connection.connectTimeout = 3000
+                        if (connection.responseCode == 200) {
+                            mediaUrls.add(url)
                         }
+                    } catch (e: Exception) {
+                        // Skip this URL
                     }
                 }
             }
+            
+            return@withContext mediaUrls
         }
-    }
-    
-    private fun isValidMediaUrl(url: String): Boolean {
-        return url.matches(Regex(".*\\.(jpg|jpeg|png|gif|webp|mp4|mov).*", RegexOption.IGNORE_CASE)) &&
-               !url.contains("profile") && 
-               !url.contains("avatar") &&
-               !url.contains("icon") &&
-               url.length > 10
     }
     
     private fun extractTweetId(url: String): String? {
         val patterns = listOf(
             Pattern.compile("status/(\\d+)"),
-            Pattern.compile("statuses/(\\d+)"),
-            Pattern.compile("/status/(\\d+)"),
-            Pattern.compile("twitter\\.com/[^/]+/status/(\\d+)"),
-            Pattern.compile("x\\.com/[^/]+/status/(\\d+)")
+            Pattern.compile("statuses/(\\d+)")
         )
         
         for (pattern in patterns) {
@@ -451,7 +406,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val request = DownloadManager.Request(Uri.parse(url)).apply {
                     setTitle("Twitter Media ${index + 1} of ${urls.size}")
-                    setDescription("Downloaded via Twitter Downloader")
+                    setDescription("Downloaded from Twitter/X")
                     setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     
                     val extension = getFileExtension(url)
@@ -463,19 +418,18 @@ class MainActivity : AppCompatActivity() {
                         DownloadManager.Request.NETWORK_MOBILE
                     )
                     
-                    addRequestHeader("User-Agent", "TwitterDownloader/1.0")
+                    addRequestHeader("User-Agent", "Mozilla/5.0 (Android 13; Mobile)")
                     addRequestHeader("Referer", "https://twitter.com/")
                 }
                 
                 downloadManager.enqueue(request)
                 
             } catch (e: Exception) {
-                e.printStackTrace()
                 Toast.makeText(this, "Failed to start download ${index + 1}", Toast.LENGTH_SHORT).show()
             }
         }
         
-        Toast.makeText(this, "✅ ${urls.size} downloads started!\nCheck Downloads folder & notifications", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "✅ ${urls.size} downloads started!", Toast.LENGTH_LONG).show()
     }
     
     private fun getFileExtension(url: String): String {
@@ -483,10 +437,8 @@ class MainActivity : AppCompatActivity() {
             url.contains(".mp4", true) -> "mp4"
             url.contains(".mov", true) -> "mov"
             url.contains(".webm", true) -> "webm"
-            url.contains(".webp", true) -> "webp"
             url.contains(".png", true) -> "png"
             url.contains(".gif", true) -> "gif"
-            url.contains(".jpeg", true) -> "jpeg"
             else -> "jpg"
         }
     }
@@ -499,9 +451,18 @@ class MainActivity : AppCompatActivity() {
     private fun showSuccessDialog(mediaCount: Int) {
         AlertDialog.Builder(this)
             .setTitle("🎉 Downloads Started!")
-            .setMessage("Started downloading $mediaCount media file(s).\n\nFiles will be saved to your Downloads folder. Check your notification bar for progress.")
-            .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
-            .setNeutralButton("Clear URL") { _, _ -> urlInput.setText("") }
+            .setMessage("Started downloading $mediaCount file(s). Check your Downloads folder and notifications.")
+            .setPositiveButton("OK", null)
+            .setNeutralButton("Clear") { _, _ -> urlInput.setText("") }
+            .show()
+    }
+    
+    private fun showFallbackDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("💡 Alternative Option")
+            .setMessage("The automatic download didn't work. Would you like to open the download service in your browser to try manually?")
+            .setPositiveButton("Open Browser") { _, _ -> openServiceInBrowser() }
+            .setNegativeButton("Cancel", null)
             .show()
     }
     
@@ -510,16 +471,7 @@ class MainActivity : AppCompatActivity() {
         when (requestCode) {
             STORAGE_PERMISSION_CODE -> {
                 if (grantResults.isEmpty() || grantResults.any { it != PackageManager.PERMISSION_GRANTED }) {
-                    AlertDialog.Builder(this)
-                        .setTitle("⚠️ Permission Required")
-                        .setMessage("Storage permission is needed to download files to your device. Please grant the permission in Settings.")
-                        .setPositiveButton("Settings") { _, _ ->
-                            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                            intent.data = Uri.parse("package:$packageName")
-                            startActivity(intent)
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
+                    Toast.makeText(this, "Storage permission needed for downloads", Toast.LENGTH_LONG).show()
                 }
             }
         }

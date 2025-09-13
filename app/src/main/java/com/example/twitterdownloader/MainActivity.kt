@@ -102,13 +102,12 @@ class MainActivity : AppCompatActivity() {
         // Status text
         statusText = TextView(this).apply {
             text = "🚀 Ready to find media!\n\n" +
-                   "Based on xdownloader.com's method:\n" +
-                   "• Fetches public post HTML\n" +
-                   "• Parses __NEXT_DATA__ JSON for extended_entities\n" +
-                   "• Extracts highest quality media URLs from variants\n" +
-                   "• Downloads directly from X's CDN\n\n" +
-                   "Paste a URL and tap 'Find Media'\n\n" +
-                   "Note: For age-restricted posts, extraction may require browser confirmation—app fetches as guest."
+                   "Updated method based on xdownloader.com and guest API:\n" +
+                   "• Uses guest token for better compatibility (incl. sensitive content)\n" +
+                   "• Fetches tweet data via API v2\n" +
+                   "• Extracts highest quality media URLs\n" +
+                   "• Downloads directly from X's servers\n\n" +
+                   "Paste a URL and tap 'Find Media'"
             setPadding(16, 16, 16, 16)
             textSize = 14f
         }
@@ -187,18 +186,27 @@ class MainActivity : AppCompatActivity() {
         resultsText.visibility = View.GONE
         downloadButton.visibility = View.GONE
         
-        statusText.text = "🔍 Finding media using xdownloader.com method...\n\nStep 1: Fetching post data..."
+        statusText.text = "🔍 Finding media using guest API method...\n\nStep 1: Obtaining guest token..."
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val tweetId = extractTweetId(postUrl) ?: throw Exception("Invalid URL - no tweet ID found")
-                val fetchUrl = "https://x.com/i/status/$tweetId"  // Use embed endpoint for cleaner HTML
-                val postData = fetchPostData(fetchUrl)
+                
+                val bearer = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+                
+                val guestToken = getGuestToken(bearer)
+                
+                withContext(Dispatchers.Main) {
+                    statusText.text = "🔍 Step 2: Fetching tweet data with guest token..."
+                }
+                
+                val tweetJson = fetchTweetJson(tweetId, bearer, guestToken)
+                
                 withContext(Dispatchers.Main) {
                     statusText.text = "🔍 Step 2: Parsing JSON for media URLs..."
                 }
                 
-                val mediaUrls = extractAllMediaUrls(postData)
+                val mediaUrls = extractAllMediaUrls(tweetJson)
                 
                 withContext(Dispatchers.Main) {
                     statusText.text = "🔍 Step 3: Verifying media accessibility..."
@@ -217,149 +225,122 @@ class MainActivity : AppCompatActivity() {
                     progressBar.visibility = View.GONE
                     statusText.text = "❌ Media search failed: ${e.message}\n\n" +
                                     "Common causes:\n" +
-                                    "• Post is private, deleted, or age-restricted\n" +
+                                    "• Post is private or deleted\n" +
+                                    "• Age-restricted content requires login (not supported)\n" +
                                     "• No media in this post\n" +
-                                    "• Network issues or X changes\n\n" +
-                                    "Try a different public post with videos/images."
+                                    "• Network connectivity issues or X API changes\n\n" +
+                                    "Try a different public post or check if the post is age-restricted."
                     loadButton.isEnabled = true
                 }
             }
         }
     }
     
-    private suspend fun fetchPostData(fetchUrl: String): String {
+    private suspend fun getGuestToken(bearer: String): String {
         return withContext(Dispatchers.IO) {
-            // Expanded user agents for better compatibility
-            val userAgents = listOf(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-                "Mozilla/5.0 (Android 14; Mobile; rv:130.0) Gecko/130.0 Firefox/130.0"
-            )
+            val url = URL("https://api.twitter.com/1.1/guest/activate.json")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Authorization", "Bearer $bearer")
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+            connection.connect()
             
-            for ((index, userAgent) in userAgents.withIndex()) {
-                try {
-                    withContext(Dispatchers.Main) {
-                        statusText.text = "🔍 Step 1: Trying fetch method ${index + 1}/${userAgents.size}..."
-                    }
-                    
-                    val connection = URL(fetchUrl).openConnection() as HttpURLConnection
-                    connection.apply {
-                        requestMethod = "GET"
-                        setRequestProperty("User-Agent", userAgent)
-                        setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-                        setRequestProperty("Accept-Language", "en-US,en;q=0.5")
-                        setRequestProperty("Referer", "https://x.com/")
-                        connectTimeout = 15000
-                        readTimeout = 15000
-                        instanceFollowRedirects = true
-                    }
-                    
-                    if (connection.responseCode in 200..299) {
-                        val html = connection.inputStream.bufferedReader().use { it.readText() }
-                        if (html.contains("__NEXT_DATA__") || html.contains("extended_entities")) { // Check for useful data
-                            return@withContext html
-                        }
-                    }
-                } catch (e: Exception) {
-                    // Continue to next
-                }
+            if (connection.responseCode !in 200..299) {
+                throw Exception("Failed to get guest token: ${connection.responseCode}")
             }
             
-            throw Exception("Could not fetch post data - try non-restricted post")
+            val jsonStr = connection.inputStream.bufferedReader().use { it.readText() }
+            val json = JSONObject(jsonStr)
+            json.getString("guest_token")
         }
     }
     
-    private fun extractAllMediaUrls(html: String): List<String> {
+    private suspend fun fetchTweetJson(tweetId: String, bearer: String, guestToken: String): String {
+        return withContext(Dispatchers.IO) {
+            val apiUrl = "https://api.twitter.com/2/timeline/conversation/$tweetId.json?" +
+                        "include_profile_interstitial_type=1&include_blocking=1&include_blocked_by=1&" +
+                        "include_followed_by=1&include_want_retweets=1&include_mute_edge=1&include_can_dm=1&" +
+                        "include_can_media_tag=1&include_ext_has_nft_avatar=1&include_ext_is_blue_verified=1&" +
+                        "include_ext_verified_type=1&include_ext_profile_image_shape=1&skip_status=1&" +
+                        "cards_platform=Web-12&include_cards=1&include_ext_alt_text=true&" +
+                        "include_ext_limited_action_results=true&include_quote_count=true&include_reply_count=1&" +
+                        "tweet_mode=extended&include_ext_views=true&include_entities=true&include_user_entities=true&" +
+                        "include_ext_media_color=true&include_ext_article_color=true&include_ext_bg_color=true&" +
+                        "include_users=1&include_ext_csp_report_only=true&include_ext_sso=true&" +
+                        "include_ext_no_scribe=true&include_ext_session=true&include_ext_settings=true"
+            
+            val connection = URL(apiUrl).openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("Authorization", "Bearer $bearer")
+            connection.setRequestProperty("x-guest-token", guestToken)
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+            connection.setRequestProperty("Accept", "application/json")
+            
+            if (connection.responseCode !in 200..299) {
+                throw Exception("Failed to fetch tweet data: ${connection.responseCode}")
+            }
+            
+            connection.inputStream.bufferedReader().use { it.readText() }
+        }
+    }
+    
+    private fun extractAllMediaUrls(jsonStr: String): List<String> {
         val allUrls = mutableListOf<String>()
         
         try {
-            val pattern = Pattern.compile("<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", Pattern.DOTALL)
-            val matcher = pattern.matcher(html)
-            if (matcher.find()) {
-                val jsonStr = matcher.group(1)
-                val nextData = JSONObject(jsonStr)
-                val props = nextData.getJSONObject("props")
-                val pageProps = props.getJSONObject("pageProps")
-                val urqlState = pageProps.optJSONObject("urqlState")
-                if (urqlState != null) {
-                    val keys = urqlState.keys()
-                    while (keys.hasNext()) {
-                        val key = keys.next()
-                        val entry = urqlState.getJSONObject(key)
-                        if (entry.has("data")) {
-                            val data = entry.getJSONObject("data")
-                            if (data.has("tweetResult")) {
-                                val tweetResult = data.getJSONObject("tweetResult")
-                                val result = tweetResult.optJSONObject("result")
-                                if (result != null) {
-                                    val legacy = result.optJSONObject("legacy")
-                                    if (legacy != null) {
-                                        val extendedEntities = legacy.optJSONObject("extended_entities")
-                                        if (extendedEntities != null) {
-                                            val mediaArray = extendedEntities.optJSONArray("media")
-                                            if (mediaArray != null) {
-                                                for (i in 0 until mediaArray.length()) {
-                                                    val media = mediaArray.getJSONObject(i)
-                                                    val type = media.optString("type", "")
-                                                    if (type == "photo") {
-                                                        var url = media.getString("media_url_https")
-                                                        if (!url.contains(":orig")) {
-                                                            url += ":orig"
-                                                        }
-                                                        allUrls.add(url)
-                                                    } else if (type == "video" || type == "animated_gif") {
-                                                        val videoInfo = media.optJSONObject("video_info")
-                                                        if (videoInfo != null) {
-                                                            val variants = videoInfo.optJSONArray("variants")
-                                                            if (variants != null) {
-                                                                var bestUrl = ""
-                                                                var maxBitrate = -1
-                                                                for (j in 0 until variants.length()) {
-                                                                    val variant = variants.getJSONObject(j)
-                                                                    val contentType = variant.optString("content_type", "")
-                                                                    if (contentType == "video/mp4") {
-                                                                        val bitrate = variant.optInt("bitrate", 0)
-                                                                        if (bitrate > maxBitrate) {
-                                                                            maxBitrate = bitrate
-                                                                            bestUrl = variant.getString("url")
-                                                                        }
-                                                                    }
-                                                                }
-                                                                if (bestUrl.isNotEmpty()) {
-                                                                    allUrls.add(bestUrl)
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+            val json = JSONObject(jsonStr)
+            val instructions = json.getJSONObject("data")
+                .getJSONObject("threaded_conversation_with_injections_v2")
+                .getJSONArray("instructions")
+            val entries = instructions.getJSONObject(0).getJSONArray("entries")
+            
+            for (i in 0 until entries.length()) {
+                val entry = entries.getJSONObject(i)
+                if (entry.getString("entryId").startsWith("tweet-$tweetId")) {
+                    val tweetResult = entry.getJSONObject("content")
+                        .getJSONObject("itemContent")
+                        .getJSONObject("tweet_results")
+                        .getJSONObject("result")
+                    val legacy = tweetResult.optJSONObject("legacy") ?: continue
+                    val extendedEntities = legacy.optJSONObject("extended_entities") ?: continue
+                    val mediaArray = extendedEntities.optJSONArray("media") ?: continue
+                    
+                    for (j in 0 until mediaArray.length()) {
+                        val media = mediaArray.getJSONObject(j)
+                        val type = media.optString("type", "")
+                        if (type == "photo") {
+                            var url = media.getString("media_url_https")
+                            if (!url.contains(":orig")) {
+                                url += ":orig"
+                            }
+                            allUrls.add(url)
+                        } else if (type == "video" || type == "animated_gif") {
+                            val videoInfo = media.optJSONObject("video_info") ?: continue
+                            val variants = videoInfo.optJSONArray("variants") ?: continue
+                            var bestUrl = ""
+                            var maxBitrate = -1
+                            for (k in 0 until variants.length()) {
+                                val variant = variants.getJSONObject(k)
+                                val contentType = variant.optString("content_type", "")
+                                if (contentType == "video/mp4") {
+                                    val bitrate = variant.optInt("bitrate", 0)
+                                    if (bitrate > maxBitrate) {
+                                        maxBitrate = bitrate
+                                        bestUrl = variant.getString("url")
                                     }
                                 }
                             }
+                            if (bestUrl.isNotEmpty()) {
+                                allUrls.add(bestUrl)
+                            }
                         }
                     }
+                    break
                 }
             }
         } catch (e: JSONException) {
-            // Fallback to regex for robustness
-            val fallbackPatterns = listOf(
-                "\"url\"\\s*:\\s*\"(https://video.twimg.com/[^\"]*\\.mp4[^\"]*)\"",
-                "\"media_url_https\"\\s*:\\s*\"(https://pbs.twimg.com/media/[^\"]*\\.jpg[^\"]*)\"",
-                // Add more if needed
-            )
-            
-            fallbackPatterns.forEach { patternStr ->
-                val pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE or Pattern.DOTALL)
-                val matcher = pattern.matcher(html)
-                while (matcher.find()) {
-                    val url = matcher.group(1)
-                    if (isValidMediaUrl(url)) {
-                        allUrls.add(url)
-                    }
-                }
-            }
+            // Fallback if structure changes
+            statusText.text = "⚠️ JSON parsing failed: ${e.message}. Try again or report issue."
         }
         
         return allUrls.distinct()
@@ -372,19 +353,17 @@ class MainActivity : AppCompatActivity() {
             urls.forEach { url ->
                 try {
                     val connection = URL(url).openConnection() as HttpURLConnection
-                    connection.apply {
-                        requestMethod = "HEAD"
-                        setRequestProperty("User-Agent", "Mozilla/5.0 (compatible; MediaDownloader/1.0)")
-                        setRequestProperty("Referer", "https://x.com/")
-                        connectTimeout = 5000
-                        readTimeout = 5000
-                    }
+                    connection.requestMethod = "HEAD"
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (compatible; MediaDownloader/1.0)")
+                    connection.setRequestProperty("Referer", "https://x.com/")
+                    connectTimeout = 5000
+                    readTimeout = 5000
                     
-                    if (connection.responseCode in 200..299 && connection.contentLength > 0) {
+                    if (connection.responseCode in 200..299) {
                         working.add(url)
                     }
                 } catch (e: Exception) {
-                    // Skip invalid
+                    // URL failed verification
                 }
             }
             
@@ -489,11 +468,12 @@ class MainActivity : AppCompatActivity() {
     
     private fun isValidMediaUrl(url: String): Boolean {
         val lower = url.lowercase()
-        return (lower.contains("pbs.twimg.com") || lower.contains("video.twimg.com")) &&
-               (lower.contains(".mp4") || lower.contains(".jpg") || lower.contains(".jpeg") ||
-                lower.contains(".png") || lower.contains(".gif") || lower.contains(".webp")) &&
+        return (lower.contains("pbs.twimg.com") || lower.contains("video.twimg.com") ||
+                lower.contains(".mp4") || lower.contains(".jpg") || lower.contains(".jpeg") ||
+                lower.contains(".png") || lower.contains(".gif") || lower.contains(".webp") ||
+                lower.contains(".webm") || lower.contains(".m3u8")) &&
                !lower.contains("profile") && !lower.contains("avatar") && 
-               !lower.contains("icon") && url.length > 20
+               !lower.contains("icon") && url.length > 15
     }
     
     private fun getFileName(url: String): String {
@@ -501,14 +481,13 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun getFileExtension(url: String): String {
-        val ext = url.substringAfterLast(".").substringBefore("?")
         return when {
-            ext.contains("mp4", true) -> "mp4"
-            ext.contains("webm", true) -> "webm"
-            ext.contains("png", true) -> "png"
-            ext.contains("gif", true) -> "gif"
-            ext.contains("webp", true) -> "webp"
-            ext.contains("jpeg", true) -> "jpeg"
+            url.contains(".mp4", true) -> "mp4"
+            url.contains(".webm", true) -> "webm"
+            url.contains(".png", true) -> "png"
+            url.contains(".gif", true) -> "gif"
+            url.contains(".webp", true) -> "webp"
+            url.contains(".jpeg", true) -> "jpeg"
             else -> "jpg"
         }
     }

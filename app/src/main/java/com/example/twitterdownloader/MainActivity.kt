@@ -257,17 +257,17 @@ class MainActivity : AppCompatActivity() {
     
     private suspend fun fetchTweetJson(tweetId: String, bearer: String, guestToken: String): String {
         return withContext(Dispatchers.IO) {
-            val apiUrl = "https://api.twitter.com/2/timeline/conversation/$tweetId.json?" +
-                        "include_profile_interstitial_type=1&include_blocking=1&include_blocked_by=1&" +
-                        "include_followed_by=1&include_want_retweets=1&include_mute_edge=1&include_can_dm=1&" +
-                        "include_can_media_tag=1&include_ext_has_nft_avatar=1&include_ext_is_blue_verified=1&" +
-                        "include_ext_verified_type=1&include_ext_profile_image_shape=1&skip_status=1&" +
-                        "cards_platform=Web-12&include_cards=1&include_ext_alt_text=true&" +
-                        "include_ext_limited_action_results=true&include_quote_count=true&include_reply_count=1&" +
-                        "tweet_mode=extended&include_ext_views=true&include_entities=true&include_user_entities=true&" +
-                        "include_ext_media_color=true&include_ext_article_color=true&include_ext_bg_color=true&" +
-                        "include_users=1&include_ext_csp_report_only=true&include_ext_sso=true&" +
-                        "include_ext_no_scribe=true&include_ext_session=true&include_ext_settings=true"
+            val apiUrl = """https://api.twitter.com/2/timeline/conversation/$tweetId.json?
+                |include_profile_interstitial_type=1&include_blocking=1&include_blocked_by=1&
+                |include_followed_by=1&include_want_retweets=1&include_mute_edge=1&include_can_dm=1&
+                |include_can_media_tag=1&include_ext_has_nft_avatar=1&include_ext_is_blue_verified=1&
+                |include_ext_verified_type=1&include_ext_profile_image_shape=1&skip_status=1&
+                |cards_platform=Web-12&include_cards=1&include_ext_alt_text=true&
+                |include_ext_limited_action_results=true&include_quote_count=true&include_reply_count=1&
+                |tweet_mode=extended&include_ext_views=true&include_entities=true&include_user_entities=true&
+                |include_ext_media_color=true&include_ext_article_color=true&include_ext_bg_color=true&
+                |include_users=1&include_ext_csp_report_only=true&include_ext_sso=true&
+                |include_ext_no_scribe=true&include_ext_session=true&include_ext_settings=true""".trimMargin()
             
             val connection = URL(apiUrl).openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
@@ -339,8 +339,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (e: JSONException) {
-            // Fallback if structure changes
-            statusText.text = "⚠️ JSON parsing failed: ${e.message}. Try again or report issue."
+            // Fallback or log; let outer catch handle UI
+            throw e  // Propagate to main catch for proper handling
         }
         
         return allUrls.distinct()
@@ -464,16 +464,6 @@ class MainActivity : AppCompatActivity() {
         val pattern = Pattern.compile("status(?:es)?/(\\d+)")
         val matcher = pattern.matcher(url)
         return if (matcher.find()) matcher.group(1) else null
-    }
-    
-    private fun isValidMediaUrl(url: String): Boolean {
-        val lower = url.lowercase()
-        return (lower.contains("pbs.twimg.com") || lower.contains("video.twimg.com") ||
-                lower.contains(".mp4") || lower.contains(".jpg") || lower.contains(".jpeg") ||
-                lower.contains(".png") || lower.contains(".gif") || lower.contains(".webp") ||
-                lower.contains(".webm") || lower.contains(".m3u8")) &&
-               !lower.contains("profile") && !lower.contains("avatar") && 
-               !lower.contains("icon") && url.length > 15
     }
     
     private fun getFileName(url: String): String {

@@ -15,6 +15,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.regex.Pattern
@@ -101,7 +104,8 @@ class MainActivity : AppCompatActivity() {
             text = "🚀 Ready to find media!\n\n" +
                    "Based on xdownloader.com's method:\n" +
                    "• Fetches public post data\n" +
-                   "• Extracts media URLs from HTML/JSON\n" +
+                   "• Parses __NEXT_DATA__ JSON\n" +
+                   "• Extracts media URLs from extended_entities\n" +
                    "• Downloads directly from X's servers\n\n" +
                    "Paste a URL and tap 'Find Media'"
             setPadding(16, 16, 16, 16)
@@ -186,11 +190,11 @@ class MainActivity : AppCompatActivity() {
         
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val postData = fetchPostData(postUrl)
                 withContext(Dispatchers.Main) {
-                    statusText.text = "🔍 Step 2: Parsing HTML and JSON for media URLs..."
+                    statusText.text = "🔍 Step 2: Parsing __NEXT_DATA__ JSON for media URLs..."
                 }
                 
-                val postData = fetchPostData(postUrl)
                 val mediaUrls = extractAllMediaUrls(postData, postUrl)
                 
                 withContext(Dispatchers.Main) {
@@ -261,77 +265,117 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun extractAllMediaUrls(html: String, originalUrl: String): List<String> {
-        val allUrls = mutableSetOf<String>()
+        val allUrls = mutableListOf<String>()
         
-        // Pattern 1: Direct video/image URLs in JSON
-        val jsonPatterns = listOf(
-            "\"(https://[^\"]*video\\.twimg\\.com[^\"]*\\.(mp4|webm|m3u8)[^\"]*)",
-            "\"(https://[^\"]*pbs\\.twimg\\.com/media[^\"]*\\.(jpg|jpeg|png|gif|webp)[^\"]*)",
-            "\"media_url_https?\"\\s*:\\s*\"([^\"]+)",
-            "\"video_info\"[^}]*\"variants\"[^\\]]*\"url\"\\s*:\\s*\"([^\"]+)"
-        )
-        
-        jsonPatterns.forEach { patternStr ->
-            val pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE)
+        try {
+            val pattern = Pattern.compile("<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", Pattern.DOTALL)
             val matcher = pattern.matcher(html)
-            while (matcher.find()) {
-                val url = matcher.group(1) ?: matcher.group(0)
-                if (isValidMediaUrl(url)) {
-                    allUrls.add(url.replace("\\", ""))
+            if (matcher.find()) {
+                val jsonStr = matcher.group(1)
+                val nextData = JSONObject(jsonStr)
+                val props = nextData.getJSONObject("props")
+                val pageProps = props.getJSONObject("pageProps")
+                val urqlState = pageProps.optJSONObject("urqlState")
+                if (urqlState != null) {
+                    val keys = urqlState.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val entry = urqlState.getJSONObject(key)
+                        if (entry.has("data")) {
+                            val data = entry.getJSONObject("data")
+                            if (data.has("tweetResult")) {
+                                val tweetResult = data.getJSONObject("tweetResult")
+                                val result = tweetResult.optJSONObject("result")
+                                if (result != null) {
+                                    val legacy = result.optJSONObject("legacy")
+                                    if (legacy != null) {
+                                        val extendedEntities = legacy.optJSONObject("extended_entities")
+                                        if (extendedEntities != null) {
+                                            val mediaArray = extendedEntities.optJSONArray("media")
+                                            if (mediaArray != null) {
+                                                for (i in 0 until mediaArray.length()) {
+                                                    val media = mediaArray.getJSONObject(i)
+                                                    val type = media.optString("type", "")
+                                                    if (type == "photo") {
+                                                        var url = media.getString("media_url_https")
+                                                        if (!url.contains(":orig")) {
+                                                            url += ":orig"
+                                                        }
+                                                        allUrls.add(url)
+                                                    } else if (type == "video" || type == "animated_gif") {
+                                                        val videoInfo = media.optJSONObject("video_info")
+                                                        if (videoInfo != null) {
+                                                            val variants = videoInfo.optJSONArray("variants")
+                                                            if (variants != null) {
+                                                                var bestUrl = ""
+                                                                var maxBitrate = -1
+                                                                for (j in 0 until variants.length()) {
+                                                                    val variant = variants.getJSONObject(j)
+                                                                    val contentType = variant.optString("content_type", "")
+                                                                    if (contentType == "video/mp4") {
+                                                                        val bitrate = variant.optInt("bitrate", 0)
+                                                                        if (bitrate > maxBitrate) {
+                                                                            maxBitrate = bitrate
+                                                                            bestUrl = variant.getString("url")
+                                                                        }
+                                                                    }
+                                                                }
+                                                                if (bestUrl.isNotEmpty()) {
+                                                                    allUrls.add(bestUrl)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: JSONException) {
+            statusText.text = "⚠️ JSON parsing failed, falling back to regex method..."
+            // Fallback to original regex patterns
+            val jsonPatterns = listOf(
+                "\"(https://[^\"]*video\\.twimg\\.com[^\"]*\\.(mp4|webm|m3u8)[^\"]*)",
+                "\"(https://[^\"]*pbs\\.twimg\\.com/media[^\"]*\\.(jpg|jpeg|png|gif|webp)[^\"]*)",
+                "\"media_url_https?\"\\s*:\\s*\"([^\"]+)",
+                "\"video_info\"[^}]*\"variants\"[^\\]]*\"url\"\\s*:\\s*\"([^\"]+)"
+            )
+            
+            jsonPatterns.forEach { patternStr ->
+                val pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE)
+                val matcher = pattern.matcher(html)
+                while (matcher.find()) {
+                    val url = matcher.group(1) ?: matcher.group(0)
+                    if (isValidMediaUrl(url)) {
+                        allUrls.add(url.replace("\\", ""))
+                    }
+                }
+            }
+            
+            // HTML patterns
+            val htmlPatterns = listOf(
+                "src\\s*=\\s*[\"']([^\"']*\\.(mp4|jpg|jpeg|png|gif|webp|webm|m3u8)[^\"']*)[\"']",
+                "data-src\\s*=\\s*[\"']([^\"']*\\.(mp4|jpg|jpeg|png|gif|webp|webm|m3u8)[^\"']*)[\"']"
+            )
+            
+            htmlPatterns.forEach { patternStr ->
+                val pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE)
+                val matcher = pattern.matcher(html)
+                while (matcher.find()) {
+                    val url = matcher.group(1)
+                    if (url != null && isValidMediaUrl(url)) {
+                        allUrls.add(url)
+                    }
                 }
             }
         }
         
-        // Pattern 2: HTML src attributes
-        val htmlPatterns = listOf(
-            "src\\s*=\\s*[\"']([^\"']*\\.(mp4|jpg|jpeg|png|gif|webp|webm|m3u8)[^\"']*)[\"']",
-            "data-src\\s*=\\s*[\"']([^\"']*\\.(mp4|jpg|jpeg|png|gif|webp|webm|m3u8)[^\"']*)[\"']"
-        )
-        
-        htmlPatterns.forEach { patternStr ->
-            val pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE)
-            val matcher = pattern.matcher(html)
-            while (matcher.find()) {
-                val url = matcher.group(1)
-                if (url != null && isValidMediaUrl(url)) {
-                    allUrls.add(url)
-                }
-            }
-        }
-        
-        // Pattern 3: Generate likely URLs based on tweet ID
-        val tweetId = extractTweetId(originalUrl)
-        if (tweetId != null) {
-            val generatedUrls = generateLikelyUrls(tweetId)
-            allUrls.addAll(generatedUrls)
-        }
-        
-        return allUrls.toList()
-    }
-    
-    private fun generateLikelyUrls(tweetId: String): List<String> {
-        val urls = mutableListOf<String>()
-        
-        // Common video patterns
-        val videoResolutions = listOf("1280x720", "720x720", "480x480", "640x640")
-        videoResolutions.forEach { res ->
-            urls.add("https://video.twimg.com/ext_tw_video/$tweetId/pu/vid/$res/video.mp4")
-            urls.add("https://video.twimg.com/amplify_video/$tweetId/vid/$res/video.mp4")
-        }
-        
-        // Common image patterns
-        val imageFormats = listOf("jpg", "png")
-        val imageSizes = listOf("large", "orig", "medium")
-        imageFormats.forEach { format ->
-            imageSizes.forEach { size ->
-                urls.add("https://pbs.twimg.com/media/$tweetId?format=$format&name=$size")
-            }
-        }
-        
-        // GIF pattern
-        urls.add("https://video.twimg.com/tweet_video/$tweetId.mp4")
-        
-        return urls
+        return allUrls.distinct()
     }
     
     private suspend fun verifyUrls(urls: List<String>): List<String> {
@@ -357,7 +401,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             
-            return@withContext working
+            working
         }
     }
     
